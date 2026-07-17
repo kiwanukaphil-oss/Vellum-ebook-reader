@@ -62,7 +62,7 @@ class SearchViewModel(
         _state.value = _state.value.copy(searching = true)
         // Quoting makes user text a phrase query, inert to FTS operator syntax.
         val ftsQuery = "\"${term.replace("\"", "")}\""
-        val titlesByUuid = app.bookDao.searchByTitleOrAuthor("").associateBy({ it.uuid }, { it.title })
+        val titlesByUuid = app.bookDao.allActive().associateBy({ it.uuid }, { it.title })
         val passages = (
             if (scopeBookUuid != null) app.searchDao.searchInBook(scopeBookUuid, ftsQuery, term)
             else app.searchDao.searchAllBooks(ftsQuery, term)

@@ -239,7 +239,7 @@ class BookImporter(private val app: VellumApp) {
      * scans and after sync pulls.
      */
     private suspend fun backfillMissingAssets() {
-        val shelf = app.bookDao.searchByTitleOrAuthor("")
+        val shelf = app.bookDao.allActive()
         for (book in shelf) {
             val file = File(app.booksDir, book.fileName)
             if (!file.exists()) continue

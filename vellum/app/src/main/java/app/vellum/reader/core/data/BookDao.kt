@@ -62,6 +62,10 @@ interface BookDao {
     @Query("UPDATE books SET deletedAt = :deletedAt, updatedAt = :deletedAt WHERE uuid = :uuid")
     suspend fun softDelete(uuid: String, deletedAt: Long)
 
+    /** Every live book, uncapped — for backfill/title-map uses, NOT search. */
+    @Query("SELECT * FROM books WHERE deletedAt IS NULL")
+    suspend fun allActive(): List<BookEntity>
+
     @Query("SELECT * FROM books WHERE deletedAt IS NULL AND (title LIKE '%' || :term || '%' OR author LIKE '%' || :term || '%') LIMIT 30")
     suspend fun searchByTitleOrAuthor(term: String): List<BookEntity>
 
