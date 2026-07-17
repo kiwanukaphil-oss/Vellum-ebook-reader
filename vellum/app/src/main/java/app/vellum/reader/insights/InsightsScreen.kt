@@ -38,7 +38,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-data class BookTime(val title: String, val ms: Long)
+data class BookTime(val bookUuid: String, val title: String, val ms: Long)
 
 data class InsightsState(
     val streakDays: Int = 0,
@@ -82,7 +82,7 @@ class InsightsViewModel(app: VellumApp) : ViewModel() {
 
         val titles = books.associateBy({ it.uuid }, { it.title })
         val perBook = sessions.groupBy { it.bookUuid }
-            .mapNotNull { (uuid, rows) -> titles[uuid]?.let { BookTime(it, rows.sumOf(ReadingSessionEntity::msRead)) } }
+            .mapNotNull { (uuid, rows) -> titles[uuid]?.let { BookTime(uuid, it, rows.sumOf(ReadingSessionEntity::msRead)) } }
             .sortedByDescending { it.ms }
             .take(8)
 
@@ -142,7 +142,7 @@ fun InsightsScreen(onBack: () -> Unit) {
                         modifier = Modifier.padding(horizontal = 20.dp),
                     )
                 }
-                items(state.perBook, key = { it.title }) { book ->
+                items(state.perBook, key = { it.bookUuid }) { book ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
