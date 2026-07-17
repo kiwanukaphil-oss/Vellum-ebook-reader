@@ -24,7 +24,10 @@ interface BookDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(book: BookEntity)
 
-    @Query("UPDATE books SET lastOpenedAt = :openedAt, updatedAt = :openedAt WHERE uuid = :uuid")
+    // Deliberately does NOT bump updatedAt: sync resolves the whole row by
+    // that timestamp, so merely opening a book must not beat a real metadata
+    // edit made on another device. lastOpenedAt may diverge across devices.
+    @Query("UPDATE books SET lastOpenedAt = :openedAt WHERE uuid = :uuid")
     suspend fun markOpened(uuid: String, openedAt: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
