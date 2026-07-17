@@ -4,6 +4,15 @@ Review date: 2026-07-17
 
 This document contains only confirmed bugs, missing committed functionality, accessibility defects, UI defects, and engineering issues found during the review. It intentionally excludes proposed enhancements and redesign recommendations.
 
+## Status — fix pass of 2026-07-17
+
+**Resolved** (see the correspondingly named commits on `main`):
+1 (markOpened/LWW), 2 (atomic sync writes), 6 (LIMIT 30), 7 (dataExtractionRules — DB/settings back up, books/covers/voice pack excluded), 9 (silent intent imports — snackbar notices + crash guard), 17 (edge-to-edge/status-bar contrast), 18 (theme — Ink & Linen), 19 (app icon + splash), 23 (empty-state formats), 27 (AGP 8.13.2), 29 (git repo), 30 (progression zeroed), 31 (locale ink), 32 (re-import/dedup), 33 (Insights key crash), 34 (landscape spreads), 35 (guided-view tap zones), 36 (renderer close races), 40 (EPUB images), 42 (zoom re-render), 43 (unsupervised import scope — guarded), 44 (progression 100%), 48 (ink preview color), 49 (decode spinner).
+
+**Partially addressed:** 8 (failures now surfaced/logged; registration still non-transactional — see 45), 22 (unchanged in DB; format still shown as author), 50 (stale queries cancelled; title map now uncapped but still fetched per search), 55 (Log.e added on import/sync/TTS failure paths; not yet comprehensive).
+
+**Still open:** 3 (sync-folder/local cleanup of deleted books), 4 (session time counts background), 5 (runBlocking teardown), 10 (duplicate reader destinations), 11 (one result per chapter), 12 (goals claim), 13 (schema exports/tests), 14–16 (accessibility), 20 (crowded reader top bar), 21 (forced two-column landscape), 24 (long-press discoverability), 25 (theme labels), 26 (cold start), 28 (minify), 37–39, 41, 45–47, 51–54, and the Low list.
+
 ## Critical
 
 ### 1. Reading activity can overwrite newer book metadata during sync

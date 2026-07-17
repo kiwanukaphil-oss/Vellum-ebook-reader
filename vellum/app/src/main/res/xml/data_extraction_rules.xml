@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto-backup keeps the database + settings (positions, annotations, ink)
+     but excludes the heavyweight, restorable payloads: book files (folder
+     sync / re-import restores them, and asset backfill self-heals covers and
+     search indexes) and the ~305MB neural voice pack. Without rules the
+     default backup blew the quota and could restore a DB pointing at missing
+     files. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="books/" />
+        <exclude domain="file" path="covers/" />
+        <exclude domain="file" path="tts/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="books/" />
+        <exclude domain="file" path="covers/" />
+        <exclude domain="file" path="tts/" />
+    </device-transfer>
+</data-extraction-rules>
