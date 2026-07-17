@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 
 data class PdfUiState(
@@ -108,7 +109,9 @@ class PdfReaderViewModel(
     fun commitStroke(pageIndex: Int, normalizedPoints: List<Offset>, widthNormalized: Float) {
         if (normalizedPoints.size < 2) return
         val now = System.currentTimeMillis()
-        val serialized = normalizedPoints.joinToString(";") { "%.4f,%.4f".format(it.x, it.y) }
+        // Locale.US: default-locale formatting writes comma decimals on many
+        // locales, which the comma-splitting parser then destroys.
+        val serialized = normalizedPoints.joinToString(";") { String.format(Locale.US, "%.4f,%.4f", it.x, it.y) }
         viewModelScope.launch {
             app.pdfStrokeDao.insert(
                 PdfStrokeEntity(
