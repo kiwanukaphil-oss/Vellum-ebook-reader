@@ -22,10 +22,13 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
@@ -188,7 +191,10 @@ fun ReaderScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(theme.pageColor)) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // Page paint extends behind the system bars (outer Box); the measured
+        // reading viewport does not, so no line of text sits under the status
+        // bar or the gesture area.
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
             val widthPx = constraints.maxWidth
             val heightPx = constraints.maxHeight
             val columns = if (widthPx > heightPx) 2 else 1
