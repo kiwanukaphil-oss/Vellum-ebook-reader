@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.ReadingPositionEntity
 import app.vellum.reader.epub.OpenedEpub
+import app.vellum.reader.epub.TocEntry
 import app.vellum.reader.reader.html.ContentBlock
 import app.vellum.reader.reader.html.HtmlBlockParser
 import app.vellum.reader.reader.layout.ChapterPaginator
@@ -35,6 +36,9 @@ data class PageKey(val layoutVersion: Int, val chapterIndex: Int, val pageIndex:
 
 /** Resolved destination of a page turn, known before any animation starts. */
 data class TurnTarget(val chapterIndex: Int, val pageIndex: Int)
+
+/** A reading position remembered before a TOC/scrub jump, offset-anchored. */
+data class ReturnAnchor(val chapterIndex: Int, val charOffset: Int)
 
 /** An active text selection, as chapter character offsets. */
 data class SelectionRange(val startChar: Int, val endChar: Int)
@@ -116,6 +120,12 @@ class ReaderViewModel(
     private var ttsSpeed = 1.0f
     private var sleepJob: kotlinx.coroutines.Job? = null
 
+    /** Flattened nav-doc contents; drives the TOC sheet and chapter labels. */
+    val toc = MutableStateFlow<List<TocEntry>>(emptyList())
+
+    /** Where the reader was before a TOC/scrub jump — the "return to" chip. */
+    val returnAnchor = MutableStateFlow<ReturnAnchor?>(null)
+
     private var epub: OpenedEpub? = null
     private var paginator: ChapterPaginator? = null
     private val blocksCache = mutableMapOf<Int, List<ContentBlock>>()
@@ -146,6 +156,7 @@ class ReaderViewModel(
                 return@launch
             }
             epub = opened
+            toc.value = opened.tableOfContents()
             val startChapter: Int
             if (initialChapter >= 0) {
                 startChapter = initialChapter.coerceIn(0, opened.chapterCount - 1)
@@ -430,6 +441,53 @@ class ReaderViewModel(
         pendingCharOffset = charOffset.coerceAtLeast(0)
         _ui.update { it.copy(chapterIndex = chapterIndex.coerceIn(0, it.chapterCount - 1)) }
         repaginateCurrentChapter()
+    }
+
+    /** TOC navigation: like [jumpTo], but leaves a breadcrumb to return to. */
+    fun navigateFromToc(chapterIndex: Int) {
+        rememberReturnAnchor()
+        jumpTo(chapterIndex, 0)
+    }
+
+    /**
+     * Scrubber commit: [bookFraction] (0..1) across the spine lands on the
+     * proportional page of the proportional chapter, skipping unreadable
+     * chapters the same way page turns do.
+     */
+    fun scrubTo(bookFraction: Float) {
+        val state = _ui.value
+        if (state.chapterCount == 0 || state.loading) return
+        rememberReturnAnchor()
+        val scaled = bookFraction.coerceIn(0f, 0.9999f) * state.chapterCount
+        val targetChapter = scaled.toInt().coerceIn(0, state.chapterCount - 1)
+        val fractionInChapter = scaled - targetChapter
+        viewModelScope.launch {
+            val (chapter, paginated) = firstReadableChapterFrom(targetChapter, 1)
+                ?: firstReadableChapterFrom(targetChapter - 1, -1)
+                ?: return@launch
+            val page = alignToSpread(
+                (fractionInChapter * paginated.pages.size).toInt().coerceIn(0, paginated.pages.lastIndex),
+            )
+            _ui.update {
+                it.copy(chapterIndex = chapter, pageIndex = page, pageCount = paginated.pages.size)
+            }
+            persistPosition()
+        }
+    }
+
+    fun returnToAnchor() {
+        val anchor = returnAnchor.value ?: return
+        returnAnchor.value = null
+        jumpTo(anchor.chapterIndex, anchor.charOffset)
+    }
+
+    /** First jump of a chain owns the breadcrumb; later jumps keep it. */
+    private fun rememberReturnAnchor() {
+        if (returnAnchor.value != null) return
+        returnAnchor.value = ReturnAnchor(
+            chapterIndex = _ui.value.chapterIndex,
+            charOffset = currentPage()?.startChar ?: pendingCharOffset,
+        )
     }
 
     private fun chapterText(chapterIndex: Int): String? =

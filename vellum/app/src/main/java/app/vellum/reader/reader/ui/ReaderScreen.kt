@@ -17,20 +17,29 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -41,6 +50,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -53,6 +63,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -69,6 +80,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
@@ -524,18 +536,44 @@ fun ReaderScreen(
             }
         }
 
+        val toc by viewModel.toc.collectAsState()
+        val returnAnchor by viewModel.returnAnchor.collectAsState()
+        var tocOpen by remember { mutableStateOf(false) }
+
         ReaderChrome(
             visible = ui.chromeVisible,
             ui = ui,
             theme = theme,
             isSpread = spreadMode,
             minutesLeft = viewModel.minutesLeftInChapter(),
+            chapterTitle = toc.lastOrNull { it.chapterIndex <= ui.chapterIndex }?.title,
+            bookFraction = ((ui.chapterIndex + (ui.pageIndex + 1f) / ui.pageCount.coerceAtLeast(1)) /
+                ui.chapterCount.coerceAtLeast(1)).coerceIn(0f, 1f),
+            returnLabel = returnAnchor?.let { anchor ->
+                val title = toc.lastOrNull { it.chapterIndex <= anchor.chapterIndex }?.title
+                "Return to " + (title ?: "Ch. ${anchor.chapterIndex + 1}")
+            },
             onBack = onBack,
             onOpenSettings = { settingsSheetOpen = true },
             onSearch = { onSearchInBook(bookUuid) },
             onAnnotations = { annotationsListOpen = true },
             onStartTts = { viewModel.startTts() },
+            onOpenToc = { tocOpen = true },
+            onScrub = viewModel::scrubTo,
+            onReturn = viewModel::returnToAnchor,
         )
+
+        if (tocOpen) {
+            TocSheet(
+                entries = toc,
+                currentChapter = ui.chapterIndex,
+                onSelect = {
+                    viewModel.navigateFromToc(it)
+                    tocOpen = false
+                },
+                onDismiss = { tocOpen = false },
+            )
+        }
 
         // Listening bar: visible whenever TTS is engaged.
         if (ttsStatus != TtsStatus.OFF) {
@@ -684,11 +722,17 @@ private fun ReaderChrome(
     theme: ReadingTheme,
     isSpread: Boolean,
     minutesLeft: Int?,
+    chapterTitle: String?,
+    bookFraction: Float,
+    returnLabel: String?,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onSearch: () -> Unit,
     onAnnotations: () -> Unit,
     onStartTts: () -> Unit,
+    onOpenToc: () -> Unit,
+    onScrub: (Float) -> Unit,
+    onReturn: () -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -742,19 +786,122 @@ private fun ReaderChrome(
         ) {
             val spreadEnd = minOf(ui.pageIndex + 2, ui.pageCount)
             val pageLabel =
-                if (isSpread && spreadEnd > ui.pageIndex + 1) "Pages ${ui.pageIndex + 1}–$spreadEnd of ${ui.pageCount}"
-                else "Page ${ui.pageIndex + 1} of ${ui.pageCount}"
-            val timeLeft = minutesLeft?.let { "  ·  ~${it}m left in chapter" } ?: ""
-            Text(
-                text = "Chapter ${ui.chapterIndex + 1} of ${ui.chapterCount}  ·  $pageLabel$timeLeft",
-                color = theme.inkColor.copy(alpha = 0.75f),
-                style = MaterialTheme.typography.labelMedium,
+                if (isSpread && spreadEnd > ui.pageIndex + 1) "${ui.pageIndex + 1}–$spreadEnd / ${ui.pageCount}"
+                else "${ui.pageIndex + 1} / ${ui.pageCount}"
+            val timeLeft = minutesLeft?.let { " · ~${it}m" } ?: ""
+            // Rust is the reading signal, matched to the page's temperature.
+            val accent = if (theme.isDark) Color(0xFFD98B66) else Color(0xFFB85C38)
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(theme.pageColor.copy(alpha = 0.94f))
-                    .navigationBarsPadding()
-                    .padding(vertical = 10.dp),
-                textAlign = TextAlign.Center,
+                    .navigationBarsPadding(),
+            ) {
+                SpineScrubber(
+                    fraction = bookFraction,
+                    accent = accent,
+                    track = theme.inkColor.copy(alpha = 0.14f),
+                    onCommit = onScrub,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable(onClick = onOpenToc),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List,
+                            contentDescription = "Table of contents",
+                            tint = theme.inkColor.copy(alpha = 0.75f),
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = chapterTitle?.let { "Ch. ${ui.chapterIndex + 1} · $it" }
+                                ?: "Chapter ${ui.chapterIndex + 1} of ${ui.chapterCount}",
+                            color = theme.inkColor.copy(alpha = 0.75f),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = "$pageLabel$timeLeft",
+                        color = theme.inkColor.copy(alpha = 0.75f),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                returnLabel?.let { label ->
+                    TextButton(
+                        onClick = onReturn,
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    ) {
+                        Text(label, color = accent, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The book's fore-edge as a control: a hairline showing position through the
+ * whole spine; drag or tap anywhere on it to travel. Commits on release so
+ * the reader can aim before the page actually moves.
+ */
+@Composable
+private fun SpineScrubber(
+    fraction: Float,
+    accent: Color,
+    track: Color,
+    onCommit: (Float) -> Unit,
+) {
+    var dragFraction by remember { mutableStateOf<Float?>(null) }
+    val shown = dragFraction ?: fraction
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(26.dp)
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    onCommit((offset.x / size.width).coerceIn(0f, 1f))
+                }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset ->
+                        dragFraction = (offset.x / size.width).coerceIn(0f, 1f)
+                    },
+                    onDragEnd = {
+                        dragFraction?.let(onCommit)
+                        dragFraction = null
+                    },
+                    onDragCancel = { dragFraction = null },
+                ) { change, _ ->
+                    dragFraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                }
+            },
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth(),
+        ) {
+            Box(Modifier.fillMaxWidth().height(3.dp).align(Alignment.CenterStart).background(track))
+            Box(Modifier.fillMaxWidth(shown).height(3.dp).align(Alignment.CenterStart).background(accent))
+            Box(
+                modifier = Modifier
+                    .align(BiasAlignment(shown * 2f - 1f, 0f))
+                    .size(if (dragFraction != null) 14.dp else 8.dp)
+                    .background(accent, CircleShape),
             )
         }
     }

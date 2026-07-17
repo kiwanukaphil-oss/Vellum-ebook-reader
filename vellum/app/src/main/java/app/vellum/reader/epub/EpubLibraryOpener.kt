@@ -35,6 +35,9 @@ class EpubLibraryOpener(context: Context) {
     }
 }
 
+/** One nav-doc entry mapped onto a spine index, for the reader's TOC sheet. */
+data class TocEntry(val title: String, val chapterIndex: Int, val depth: Int)
+
 /** An opened publication exposing exactly what the Phase 1 reader needs. */
 class OpenedEpub(private val publication: Publication) {
 
@@ -59,6 +62,32 @@ class OpenedEpub(private val publication: Publication) {
         val resource = publication.get(link) ?: return null
         val bytes = resource.read().getOrElse { return null }
         return bytes.toString(Charsets.UTF_8)
+    }
+
+    /**
+     * The nav-doc TOC flattened onto spine indices (fragment-only differences
+     * collapse to the chapter). Books without a usable nav doc fall back to
+     * spine-link titles, then to plain "Chapter N" labels.
+     */
+    fun tableOfContents(): List<TocEntry> {
+        val hrefToIndex = publication.readingOrder.mapIndexed { index, link ->
+            link.href.toString().trimStart('/').substringBefore('#') to index
+        }.toMap()
+        val entries = mutableListOf<TocEntry>()
+        fun walk(links: List<Link>, depth: Int) {
+            links.forEach { link ->
+                val href = link.href.toString().trimStart('/').substringBefore('#')
+                val title = link.title?.takeIf { it.isNotBlank() }
+                val index = hrefToIndex[href]
+                if (index != null && title != null) entries.add(TocEntry(title, index, depth))
+                walk(link.children, depth + 1)
+            }
+        }
+        walk(publication.tableOfContents, 0)
+        if (entries.isNotEmpty()) return entries
+        return publication.readingOrder.mapIndexed { index, link ->
+            TocEntry(link.title?.takeIf { it.isNotBlank() } ?: "Chapter ${index + 1}", index, 0)
+        }
     }
 
     /** The publication's embedded cover art, if any. */
