@@ -18,6 +18,9 @@ interface BookDao {
     @Query("SELECT fileName FROM books")
     suspend fun allFileNames(): List<String>
 
+    @Query("SELECT * FROM books WHERE fileName = :fileName LIMIT 1")
+    suspend fun byFileName(fileName: String): BookEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(book: BookEntity)
 

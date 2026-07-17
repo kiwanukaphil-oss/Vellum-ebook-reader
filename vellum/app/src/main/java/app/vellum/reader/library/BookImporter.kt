@@ -35,6 +35,12 @@ class BookImporter(private val app: VellumApp) {
             temp.delete()
             return@withContext null
         }
+        // Same-content dedup: re-sharing a file (or a rotation replaying the
+        // launch intent) must not create a second library entry.
+        alreadyImportedCopy(temp)?.let { existing ->
+            temp.delete()
+            return@withContext existing
+        }
         // Sniff the real format — file pickers often report octet-stream.
         val magic = temp.inputStream().use { stream -> ByteArray(4).also { stream.read(it) } }
         val magicText = magic.decodeToString()
@@ -51,6 +57,31 @@ class BookImporter(private val app: VellumApp) {
             null
         }
     }
+
+    /**
+     * Finds a live library book whose file is byte-identical to [candidate].
+     * Length check first narrows the field cheaply; only length twins are
+     * byte-compared. Returns null when no registered, undeleted twin exists.
+     */
+    private suspend fun alreadyImportedCopy(candidate: File): BookEntity? {
+        val twin = app.booksDir.listFiles()
+            ?.filter { it.isFile && it != candidate && it.extension.lowercase() != "tmp" && it.length() == candidate.length() }
+            ?.firstOrNull { contentsMatch(it, candidate) }
+            ?: return null
+        return app.bookDao.byFileName(twin.name)?.takeIf { it.deletedAt == null }
+    }
+
+    private fun contentsMatch(a: File, b: File): Boolean =
+        a.inputStream().buffered().use { streamA ->
+            b.inputStream().buffered().use { streamB ->
+                var byteA: Int
+                do {
+                    byteA = streamA.read()
+                    if (byteA != streamB.read()) return false
+                } while (byteA != -1)
+                true
+            }
+        }
 
     /** A ZIP is an EPUB (has a mimetype/OPF entry) or a CBZ (bag of images). */
     private fun sniffZipKind(file: File): String = try {

@@ -24,7 +24,9 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleImportIntent(intent)
+        // Only on a fresh launch: the activity's intent survives rotation and
+        // process recreation, which would re-run the import on every rebuild.
+        if (savedInstanceState == null) handleImportIntent(intent)
         setContent {
             MaterialTheme {
                 VellumNavHost()
