@@ -110,7 +110,8 @@ class ComicReaderViewModel(
                     chapterIndex = pageIndex,
                     chapterHref = "page:$pageIndex",
                     charOffset = 0,
-                    progression = if (_ui.value.pageCount > 0) pageIndex.toDouble() / _ui.value.pageCount else 0.0,
+                    // (index+1)/count so the last page reads 100%, not (n-1)/n.
+                    progression = if (_ui.value.pageCount > 0) (pageIndex + 1).toDouble() / _ui.value.pageCount else 0.0,
                     updatedAt = System.currentTimeMillis(),
                 ),
             )

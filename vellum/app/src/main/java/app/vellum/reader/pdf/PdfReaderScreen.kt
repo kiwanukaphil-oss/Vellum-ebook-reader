@@ -45,11 +45,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -71,6 +72,8 @@ import app.vellum.reader.core.data.PdfStrokeEntity
 import app.vellum.reader.core.model.HighlightColors
 import app.vellum.reader.core.settings.ReaderSettings
 import app.vellum.reader.core.theme.sharedCoverBounds
+import kotlinx.coroutines.flow.debounce
+import kotlin.math.roundToInt
 
 /** Inverts page colors for dark themes — the classic PDF night mode. */
 private val invertFilter = ColorFilter.colorMatrix(
@@ -117,6 +120,7 @@ fun PdfReaderScreen(bookUuid: String, onBack: () -> Unit) {
                         pageIndex = pageIndex,
                         strokes = strokesByPage[pageIndex].orEmpty(),
                         markupMode = ui.markupMode,
+                        markupColor = HighlightColors.byId(ui.markupColorId).color,
                         invert = theme.isDark,
                         onToggleChrome = viewModel::toggleChrome,
                     )
@@ -143,21 +147,46 @@ private fun PdfPage(
     pageIndex: Int,
     strokes: List<PdfStrokeEntity>,
     markupMode: Boolean,
+    markupColor: Color,
     invert: Boolean,
     onToggleChrome: () -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val widthPx = constraints.maxWidth
-        val bitmap by produceState<Bitmap?>(initialValue = null, pageIndex, widthPx) {
-            value = viewModel.renderer?.renderPage(pageIndex, widthPx)
-        }
         var scale by remember(pageIndex) { mutableFloatStateOf(1f) }
         var pan by remember(pageIndex) { mutableStateOf(Offset.Zero) }
         val livePoints = remember(pageIndex) { mutableStateListOf<Offset>() }
 
+        // Base render at view width; once a pinch settles, re-render at the
+        // zoomed width (upgrade-only while zoomed, capped for memory) so text
+        // stays sharp instead of showing a stretched bitmap.
+        var renderWidth by remember(pageIndex, widthPx) { mutableIntStateOf(widthPx) }
+        @OptIn(kotlinx.coroutines.FlowPreview::class)
+        LaunchedEffect(pageIndex, widthPx) {
+            snapshotFlow { scale }
+                .debounce(250)
+                .collect { settled ->
+                    val target = (widthPx * settled.coerceAtMost(3f)).roundToInt().coerceAtMost(2600)
+                    if (target > renderWidth) renderWidth = target
+                    else if (settled <= 1.05f) renderWidth = widthPx
+                }
+        }
+        // The old bitmap stays visible while a sharper one renders — no flash.
+        var bitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(null) }
+        var failed by remember(pageIndex) { mutableStateOf(false) }
+        LaunchedEffect(pageIndex, renderWidth) {
+            val rendered = viewModel.renderer?.renderPage(pageIndex, renderWidth)
+            if (rendered != null) bitmap = rendered else if (bitmap == null) failed = true
+        }
+        LaunchedEffect(pageIndex, widthPx) { viewModel.prefetchAround(pageIndex, widthPx) }
+
         val pageBitmap = bitmap
         if (pageBitmap == null) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            if (failed) {
+                Text("Couldn't display this page", modifier = Modifier.align(Alignment.Center))
+            } else {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            }
             return@BoxWithConstraints
         }
         val aspect = pageBitmap.width.toFloat() / pageBitmap.height.toFloat()
@@ -229,7 +258,7 @@ private fun PdfPage(
                     )
                 }
                 if (livePoints.isNotEmpty()) {
-                    drawInk(livePoints.toList(), Color(0xFFE39EB1), 0.004f)
+                    drawInk(livePoints.toList(), markupColor, 0.004f)
                 }
             }
         }

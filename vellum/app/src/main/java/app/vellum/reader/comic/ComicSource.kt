@@ -114,12 +114,16 @@ class ComicPageStore(private val source: ComicSource) {
     private val cache = LruCache<String, Bitmap>(6)
     private val mutex = Mutex()
 
+    /** Set under the mutex so close() can't race an in-flight decode. */
+    private var closed = false
+
     val pageCount: Int get() = source.pageCount
 
     suspend fun page(index: Int, targetWidthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
         val key = "$index@$targetWidthPx"
         cache.get(key)?.let { return@withContext it }
         mutex.withLock {
+            if (closed) return@withLock null
             cache.get(key)?.let { return@withLock it }
             val bytes = source.pageBytes(index) ?: return@withLock null
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -131,5 +135,12 @@ class ComicPageStore(private val source: ComicSource) {
         }
     }
 
-    fun close() = source.close()
+    fun close() {
+        kotlinx.coroutines.runBlocking {
+            mutex.withLock {
+                closed = true
+                source.close()
+            }
+        }
+    }
 }

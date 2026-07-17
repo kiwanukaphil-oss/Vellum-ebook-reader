@@ -23,23 +23,30 @@ class PdfPageRenderer(file: File) {
     private val renderer = PdfRenderer(descriptor)
     private val mutex = Mutex()
 
-    /** ~5 full-resolution pages ≈ 40–60MB worst case; evicts by count. */
-    private val cache = LruCache<String, Bitmap>(5)
+    /** Set under the mutex; renders that lose the race bail out with null. */
+    private var closed = false
+
+    /** Byte-sized eviction: zoom re-renders vary widths, counts would lie. */
+    private val cache = object : LruCache<String, Bitmap>(96 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
 
     val pageCount: Int get() = renderer.pageCount
 
     /** Width/height ratio of a page, for layout before the bitmap arrives. */
     suspend fun pageAspectRatio(pageIndex: Int): Float = mutex.withLock {
+        if (closed) return@withLock 1f
         renderer.openPage(pageIndex).use { page ->
             page.width.toFloat() / page.height.toFloat()
         }
     }
 
-    /** Renders (or returns cached) page bitmap at [targetWidthPx]. */
-    suspend fun renderPage(pageIndex: Int, targetWidthPx: Int): Bitmap = withContext(Dispatchers.IO) {
+    /** Renders (or returns cached) page bitmap; null once the renderer closed. */
+    suspend fun renderPage(pageIndex: Int, targetWidthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
         val key = "$pageIndex@$targetWidthPx"
         cache.get(key)?.let { return@withContext it }
         mutex.withLock {
+            if (closed) return@withLock null
             cache.get(key)?.let { return@withLock it }
             renderer.openPage(pageIndex).use { page ->
                 val height = (targetWidthPx * page.height.toFloat() / page.width).roundToInt()
@@ -52,12 +59,18 @@ class PdfPageRenderer(file: File) {
         }
     }
 
+    /** Waits for any in-flight render — closing PdfRenderer mid-render crashes. */
     fun close() {
-        try {
-            renderer.close()
-            descriptor.close()
-        } catch (e: Exception) {
-            // Already closed — nothing to release.
+        kotlinx.coroutines.runBlocking {
+            mutex.withLock {
+                closed = true
+                try {
+                    renderer.close()
+                    descriptor.close()
+                } catch (e: Exception) {
+                    // Already closed — nothing to release.
+                }
+            }
         }
     }
 }

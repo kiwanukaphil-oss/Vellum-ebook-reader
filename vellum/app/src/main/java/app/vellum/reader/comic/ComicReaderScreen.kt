@@ -51,6 +51,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -70,9 +71,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.ComicPanelEntity
 import app.vellum.reader.core.theme.sharedCoverBounds
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * The comic wing: paged image reading with pinch-zoom, per-book right-to-left
@@ -93,11 +96,21 @@ fun ComicReaderScreen(bookUuid: String, onBack: () -> Unit) {
             ui.error != null -> Text(ui.error!!, color = Color.White, modifier = Modifier.align(Alignment.Center))
             else -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val landscape = constraints.maxWidth > constraints.maxHeight
-                val pagerState = rememberPagerState(initialPage = ui.startPage) { ui.pageCount }
+                // Landscape pages come in twos: each pager item is the spread
+                // (2i, 2i+1), so a swipe advances a whole spread and no page
+                // repeats between neighbors.
+                val pagerState = rememberPagerState(
+                    initialPage = if (landscape) ui.startPage / 2 else ui.startPage,
+                ) { if (landscape) (ui.pageCount + 1) / 2 else ui.pageCount }
                 val scope = rememberCoroutineScope()
-                LaunchedEffect(pagerState.currentPage) {
-                    viewModel.persistPage(pagerState.currentPage)
-                    viewModel.prefetchAround(pagerState.currentPage, constraints.maxWidth)
+                LaunchedEffect(pagerState.currentPage, landscape) {
+                    val leadingPage = if (landscape) pagerState.currentPage * 2 else pagerState.currentPage
+                    viewModel.persistPage(leadingPage)
+                    // Prefetch at the width pages actually render at (half in spreads).
+                    viewModel.prefetchAround(
+                        leadingPage,
+                        if (landscape) constraints.maxWidth / 2 else constraints.maxWidth,
+                    )
                 }
 
                 HorizontalPager(
@@ -107,8 +120,7 @@ fun ComicReaderScreen(bookUuid: String, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxSize(),
                 ) { pageIndex ->
                     if (landscape) {
-                        // Spread: this page plus the next, ordered per direction.
-                        SpreadView(viewModel, pageIndex, ui.rtl, viewModel::toggleChrome)
+                        SpreadView(viewModel, pageIndex, ui.pageCount, ui.rtl, viewModel::toggleChrome)
                     } else {
                         ComicPageView(
                             viewModel = viewModel,
@@ -161,18 +173,44 @@ private fun ComicPageView(
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val widthPx = constraints.maxWidth
-        val bitmap by produceState<Bitmap?>(initialValue = null, pageIndex, widthPx) {
-            value = viewModel.store?.page(pageIndex, widthPx)
-        }
         val scope = rememberCoroutineScope()
         val scale = remember(pageIndex) { Animatable(1f) }
         val pan = remember(pageIndex) { Animatable(Offset.Zero, Offset.VectorConverter) }
         var panelStep by remember(pageIndex) { mutableIntStateOf(-1) }
         var dragRect by remember(pageIndex) { mutableStateOf<Rect?>(null) }
 
+        // Base decode at view width; a settled zoom re-decodes at the zoomed
+        // width (upgrade-only, capped) so art stays sharp under the pinch.
+        var renderWidth by remember(pageIndex, widthPx) { mutableIntStateOf(widthPx) }
+        @OptIn(kotlinx.coroutines.FlowPreview::class)
+        LaunchedEffect(pageIndex, widthPx) {
+            snapshotFlow { scale.value }
+                .debounce(250)
+                .collect { settled ->
+                    val target = (widthPx * settled.coerceAtMost(3f)).roundToInt().coerceAtMost(2600)
+                    if (target > renderWidth) renderWidth = target
+                    else if (settled <= 1.05f) renderWidth = widthPx
+                }
+        }
+        // The old bitmap stays visible while a sharper one decodes — no flash.
+        var bitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(null) }
+        var failed by remember(pageIndex) { mutableStateOf(false) }
+        LaunchedEffect(pageIndex, renderWidth) {
+            val decoded = viewModel.store?.page(pageIndex, renderWidth)
+            if (decoded != null) bitmap = decoded else if (bitmap == null) failed = true
+        }
+
         val pageBitmap = bitmap
         if (pageBitmap == null) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color.White)
+            if (failed) {
+                Text(
+                    "Couldn't display this page",
+                    color = Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            } else {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color.White)
+            }
             return@BoxWithConstraints
         }
         val aspect = pageBitmap.width.toFloat() / pageBitmap.height.toFloat()
@@ -258,9 +296,16 @@ private fun ComicPageView(
                                 resetCamera()
                             },
                         ) { offset ->
+                            // graphicsLayer inverse-maps pointer positions into
+                            // page space, so once the camera zooms to a side
+                            // panel every visible tap lands in that side's
+                            // zone. Map back to screen space (center pivot +
+                            // pan) before deciding the zone.
+                            val screenX = (offset.x - size.width / 2f) * scale.value +
+                                size.width / 2f + pan.value.x
                             val third = size.width / 3f
-                            val forward = if (rtl) offset.x < third else offset.x > 2 * third
-                            val backward = if (rtl) offset.x > 2 * third else offset.x < third
+                            val forward = if (rtl) screenX < third else screenX > 2 * third
+                            val backward = if (rtl) screenX > 2 * third else screenX < third
                             val boxSize = Size(size.width.toFloat(), size.height.toFloat())
                             when {
                                 forward -> {
@@ -338,11 +383,12 @@ private fun ComicPageView(
     }
 }
 
-/** Landscape: this page and the next side by side, ordered by direction. */
+/** Landscape: the spread (2i, 2i+1) side by side, ordered by direction. */
 @Composable
 private fun SpreadView(
     viewModel: ComicReaderViewModel,
-    pageIndex: Int,
+    spreadIndex: Int,
+    pageCount: Int,
     rtl: Boolean,
     onToggleChrome: () -> Unit,
 ) {
@@ -352,21 +398,25 @@ private fun SpreadView(
             .pointerInput(Unit) { detectTapGestures { onToggleChrome() } },
     ) {
         val halfWidth = constraints.maxWidth / 2
-        val first = if (rtl) pageIndex + 1 else pageIndex
-        val second = if (rtl) pageIndex else pageIndex + 1
+        val basePage = spreadIndex * 2
+        // Manga reads right-to-left: the leading page sits on the right.
+        val leftPage = if (rtl) basePage + 1 else basePage
+        val rightPage = if (rtl) basePage else basePage + 1
         Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.Center) {
-            listOf(first, second).forEach { index ->
-                val bitmap by produceState<Bitmap?>(initialValue = null, index, halfWidth) {
-                    value = viewModel.store?.page(index, halfWidth)
-                }
+            listOf(leftPage, rightPage).forEach { index ->
                 Box(modifier = Modifier.fillMaxHeight().weight(1f)) {
-                    bitmap?.let {
-                        Image(
-                            bitmap = it.asImageBitmap(),
-                            contentDescription = "Page ${index + 1}",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                    if (index in 0 until pageCount) {
+                        val bitmap by produceState<Bitmap?>(initialValue = null, index, halfWidth) {
+                            value = viewModel.store?.page(index, halfWidth)
+                        }
+                        bitmap?.let {
+                            Image(
+                                bitmap = it.asImageBitmap(),
+                                contentDescription = "Page ${index + 1}",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                 }
             }
