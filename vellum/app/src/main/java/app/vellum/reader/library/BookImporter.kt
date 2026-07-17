@@ -3,6 +3,7 @@ package app.vellum.reader.library
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.data.BookTextFts
@@ -25,20 +26,30 @@ import java.util.UUID
  */
 class BookImporter(private val app: VellumApp) {
 
+    private companion object {
+        const val TAG = "VellumImport"
+    }
+
     suspend fun importFromUri(uri: Uri): BookEntity? = withContext(Dispatchers.IO) {
         val temp = File(app.booksDir, "${UUID.randomUUID()}.tmp")
         try {
             app.contentResolver.openInputStream(uri)?.use { input ->
                 temp.outputStream().use { output -> input.copyTo(output) }
-            } ?: return@withContext null
+            } ?: run {
+                app.importNotices.tryEmit("Couldn't read that file")
+                return@withContext null
+            }
         } catch (e: Exception) {
+            Log.e(TAG, "Import copy failed for $uri", e)
             temp.delete()
+            app.importNotices.tryEmit("Couldn't read that file")
             return@withContext null
         }
         // Same-content dedup: re-sharing a file (or a rotation replaying the
         // launch intent) must not create a second library entry.
         alreadyImportedCopy(temp)?.let { existing ->
             temp.delete()
+            app.importNotices.tryEmit("Already in your library: “${existing.title}”")
             return@withContext existing
         }
         // Sniff the real format — file pickers often report octet-stream.
@@ -52,9 +63,14 @@ class BookImporter(private val app: VellumApp) {
         }
         val target = File(app.booksDir, "${temp.nameWithoutExtension}.$extension")
         temp.renameTo(target)
-        registerFile(target, displayNameFor(uri)) ?: run {
+        val registered = registerFile(target, displayNameFor(uri))
+        if (registered == null) {
             target.delete()
+            app.importNotices.tryEmit("Couldn't import that file — it may be damaged or unsupported")
             null
+        } else {
+            app.importNotices.tryEmit("Added “${registered.title}”")
+            registered
         }
     }
 
@@ -142,6 +158,7 @@ class BookImporter(private val app: VellumApp) {
             store.close()
             bitmap
         } catch (e: Exception) {
+            Log.e(TAG, "Comic registration failed for ${file.name}", e)
             return null
         }
         val now = System.currentTimeMillis()
@@ -173,6 +190,7 @@ class BookImporter(private val app: VellumApp) {
             renderer.close()
             bitmap
         } catch (e: Exception) {
+            Log.e(TAG, "PDF registration failed for ${file.name}", e)
             return null // unreadable PDF — don't register it
         }
         val now = System.currentTimeMillis()

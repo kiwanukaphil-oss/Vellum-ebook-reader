@@ -48,7 +48,7 @@ data class ReturnAnchor(val chapterIndex: Int, val charOffset: Int)
 /** An active text selection, as chapter character offsets. */
 data class SelectionRange(val startChar: Int, val endChar: Int)
 
-enum class TtsStatus { OFF, PLAYING, PAUSED }
+enum class TtsStatus { OFF, PREPARING, PLAYING, PAUSED }
 
 /** Sleep timer choices, cycled from the TTS bar. */
 enum class TtsSleep(val label: String, val minutes: Int?) {
@@ -634,13 +634,19 @@ class ReaderViewModel(
      */
     private fun startKokoro(fromOffset: Int) {
         val text = chapterText(_ui.value.chapterIndex) ?: return
-        ttsStatus.value = TtsStatus.PLAYING
+        // Cold start is a 2-4s model load plus first-sentence synthesis; be
+        // honest about it instead of showing a "Pause" that pauses nothing.
+        ttsStatus.value = TtsStatus.PREPARING
         kokoroJob?.cancel()
         kokoroJob = viewModelScope.launch(Dispatchers.Default) {
             val engine = kokoro ?: try {
                 KokoroEngine(KokoroVoicePack.modelDir(app)).also { kokoro = it }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { stopTts() }
+                android.util.Log.e("VellumTts", "Kokoro engine init failed", e)
+                withContext(Dispatchers.Main) {
+                    notify("Neural voice failed to load — try re-downloading the voice pack")
+                    stopTts()
+                }
                 return@launch
             }
             engine.resetCancel()
@@ -658,6 +664,7 @@ class ReaderViewModel(
             }
             for ((base, length, pcm) in channel) {
                 withContext(Dispatchers.Main) {
+                    if (ttsStatus.value == TtsStatus.PREPARING) ttsStatus.value = TtsStatus.PLAYING
                     ttsRange.value = SelectionRange(base, base + length)
                     val page = currentPage()
                     if (page != null && base >= page.endChar) nextPage()
@@ -756,8 +763,16 @@ class ReaderViewModel(
                     onReady()
                 }
             } else {
+                notify("Read-aloud isn't available on this device")
                 ttsStatus.value = TtsStatus.OFF
             }
+        }
+    }
+
+    /** Transient user-facing notice from a background failure. */
+    private fun notify(message: String) {
+        viewModelScope.launch(Dispatchers.Main) {
+            android.widget.Toast.makeText(app, message, android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -914,6 +929,8 @@ class ReaderViewModel(
 
             @Deprecated("Deprecated in API 21")
             override fun onError(utteranceId: String?) {
+                android.util.Log.e("VellumTts", "System TTS error for $utteranceId")
+                notify("Read-aloud stopped — the voice reported an error")
                 viewModelScope.launch { stopTts() }
             }
         })

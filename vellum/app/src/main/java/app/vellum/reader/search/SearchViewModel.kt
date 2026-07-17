@@ -7,6 +7,7 @@ import app.vellum.reader.core.data.BookEntity
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
@@ -44,7 +45,9 @@ class SearchViewModel(
     init {
         viewModelScope.launch {
             @OptIn(FlowPreview::class)
-            queryFlow.debounce(250).collect { runSearch(it) }
+            // collectLatest: typing cancels the in-flight search instead of
+            // queueing behind it.
+            queryFlow.debounce(250).collectLatest { runSearch(it) }
         }
     }
 

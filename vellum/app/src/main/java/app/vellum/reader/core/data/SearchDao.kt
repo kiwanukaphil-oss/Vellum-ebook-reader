@@ -28,7 +28,7 @@ interface SearchDao {
     @Query(
         """
         SELECT bookUuid, chapterIndex,
-               snippet(book_text_fts, '', '', '…', 2, 12) AS snippet,
+               snippet(book_text_fts, '⟪', '⟫', '…', 2, 12) AS snippet,
                (instr(lower(body), lower(:rawTerm)) - 1) AS firstMatchOffset
         FROM book_text_fts
         WHERE body MATCH :ftsQuery
@@ -40,7 +40,7 @@ interface SearchDao {
     @Query(
         """
         SELECT bookUuid, chapterIndex,
-               snippet(book_text_fts, '', '', '…', 2, 12) AS snippet,
+               snippet(book_text_fts, '⟪', '⟫', '…', 2, 12) AS snippet,
                (instr(lower(body), lower(:rawTerm)) - 1) AS firstMatchOffset
         FROM book_text_fts
         WHERE body MATCH :ftsQuery AND bookUuid = :bookUuid

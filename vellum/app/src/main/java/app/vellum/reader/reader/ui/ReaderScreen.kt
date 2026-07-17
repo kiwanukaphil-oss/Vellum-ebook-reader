@@ -594,9 +594,20 @@ fun ReaderScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                     ) {
-                        androidx.compose.material3.TextButton(onClick = {
-                            if (ttsStatus == TtsStatus.PLAYING) viewModel.pauseTts() else viewModel.startTts()
-                        }) { Text(if (ttsStatus == TtsStatus.PLAYING) "Pause" else "Resume") }
+                        androidx.compose.material3.TextButton(
+                            enabled = ttsStatus != TtsStatus.PREPARING,
+                            onClick = {
+                                if (ttsStatus == TtsStatus.PLAYING) viewModel.pauseTts() else viewModel.startTts()
+                            },
+                        ) {
+                            Text(
+                                when (ttsStatus) {
+                                    TtsStatus.PREPARING -> "Preparing…"
+                                    TtsStatus.PLAYING -> "Pause"
+                                    else -> "Resume"
+                                },
+                            )
+                        }
                         androidx.compose.material3.TextButton(onClick = {
                             val rate = viewModel.cycleTtsSpeed()
                             speedLabel = "${rate}×"

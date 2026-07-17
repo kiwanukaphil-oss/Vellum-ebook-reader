@@ -76,7 +76,16 @@ class MainActivity : ComponentActivity() {
         }
         if (uri != null) {
             val app = application as VellumApp
-            app.appScope.launch { BookImporter(app).importFromUri(uri) }
+            // Guarded: appScope has no exception handler, so an importer bug
+            // must degrade to a notice, never a process crash.
+            app.appScope.launch {
+                try {
+                    BookImporter(app).importFromUri(uri)
+                } catch (e: Exception) {
+                    android.util.Log.e("VellumImport", "Intent import failed for $uri", e)
+                    app.importNotices.tryEmit("Couldn't import that file")
+                }
+            }
         }
     }
 }

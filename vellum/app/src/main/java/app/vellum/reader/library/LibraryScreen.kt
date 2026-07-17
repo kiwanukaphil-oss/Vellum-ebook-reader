@@ -51,11 +51,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -131,7 +134,14 @@ fun LibraryScreen(
         uri?.let(viewModel::importEpub)
     }
 
+    // Import outcomes from every entry point (picker, share, open-with).
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(Unit) {
+        app.importNotices.collect { snackbarHostState.showSnackbar(it) }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             // Crossfade instead of a hard swap when selection mode toggles.
             AnimatedContent(
@@ -260,13 +270,28 @@ fun LibraryScreen(
             }
 
             if (state.books.isEmpty() && !state.importing) {
+                // An empty filter result is not an empty shelf — say which.
+                val filtered = state.filter != ShelfFilter.All
                 Box(modifier = Modifier.fillMaxSize()) {
-                    Text(
-                        text = "Your shelf is empty.\nTap + to add an EPUB or PDF.",
-                        textAlign = TextAlign.Center,
-                        style = MaterialTheme.typography.bodyLarge,
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.align(Alignment.Center).padding(32.dp),
-                    )
+                    ) {
+                        Text(
+                            text = if (filtered) {
+                                "Nothing here yet."
+                            } else {
+                                "Your shelf is empty.\nTap + to add an EPUB, PDF, or comic."
+                            },
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        if (filtered) {
+                            TextButton(onClick = { viewModel.setFilter(ShelfFilter.All) }) {
+                                Text("Show all books")
+                            }
+                        }
+                    }
                 }
             } else {
                 val haptics = LocalHapticFeedback.current
@@ -322,7 +347,10 @@ fun LibraryScreen(
             syncing = syncing,
             onChooseFolder = { folderPicker.launch(null) },
             onSyncNow = { settings.syncFolderUri?.let(viewModel::syncNow) },
-            onDismiss = { syncSheetOpen = false },
+            onDismiss = {
+                syncSheetOpen = false
+                viewModel.clearSyncStatus()
+            },
         )
     }
 

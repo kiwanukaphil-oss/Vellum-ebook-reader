@@ -15,6 +15,7 @@ import app.vellum.reader.epub.EpubLibraryOpener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import java.io.File
 
 /**
@@ -55,4 +56,12 @@ class VellumApp : Application() {
 
     /** Outlives any screen — used by share/open-with imports. */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * One-line user-facing notices ("Added X", "Couldn't import…") from any
+     * import entry point — picker, share sheet, or open-with. The library
+     * screen surfaces them as snackbars; emissions are dropped if nothing is
+     * listening yet, which is fine for transient notices.
+     */
+    val importNotices = MutableSharedFlow<String>(extraBufferCapacity = 8)
 }

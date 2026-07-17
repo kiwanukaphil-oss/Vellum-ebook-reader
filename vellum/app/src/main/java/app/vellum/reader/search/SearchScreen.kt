@@ -2,6 +2,8 @@ package app.vellum.reader.search
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -27,8 +29,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
@@ -66,11 +75,14 @@ fun SearchScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            val keyboard = LocalSoftwareKeyboardController.current
             OutlinedTextField(
                 value = state.query,
                 onValueChange = viewModel::onQueryChanged,
-                placeholder = { Text("Search text…") },
+                placeholder = { Text("Search titles, authors, and text…") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -116,7 +128,7 @@ fun SearchScreen(
                                 .padding(horizontal = 20.dp, vertical = 10.dp),
                         ) {
                             Text(
-                                "…${passage.snippet}…",
+                                highlightedSnippet(passage.snippet, MaterialTheme.colorScheme.secondary),
                                 fontFamily = FontFamily.Serif,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -129,13 +141,28 @@ fun SearchScreen(
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp))
                     }
                 }
+                if (state.query.length < 2) {
+                    item {
+                        Text(
+                            if (scopeBookUuid == null) {
+                                "Search your whole library — titles, authors, and the full text of every book."
+                            } else {
+                                "Search the full text of this book."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(20.dp),
+                        )
+                    }
+                }
                 if (state.query.length >= 2 && !state.searching &&
                     state.bookMatches.isEmpty() && state.passageMatches.isEmpty()
                 ) {
                     item {
                         Text(
-                            "No matches.",
+                            "No matches for “${state.query.trim()}”.",
                             style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(20.dp),
                         )
                     }
@@ -143,4 +170,23 @@ fun SearchScreen(
             }
         }
     }
+}
+
+/** Maps the FTS snippet's ⟪…⟫ match markers onto a bold accent span. */
+private fun highlightedSnippet(snippet: String, accent: Color): AnnotatedString = buildAnnotatedString {
+    var depth = 0
+    snippet.forEach { ch ->
+        when (ch) {
+            '⟪' -> {
+                pushStyle(SpanStyle(fontWeight = FontWeight.Bold, color = accent))
+                depth++
+            }
+            '⟫' -> if (depth > 0) {
+                pop()
+                depth--
+            }
+            else -> append(ch)
+        }
+    }
+    repeat(depth) { pop() }
 }

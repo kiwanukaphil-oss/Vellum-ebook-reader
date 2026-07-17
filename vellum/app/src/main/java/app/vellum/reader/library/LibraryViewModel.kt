@@ -133,7 +133,8 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
             try {
                 val result = SyncEngine(app).sync(android.net.Uri.parse(folderUri))
                 if (result.error != null) {
-                    syncStatus.value = "Sync failed: ${result.error}"
+                    android.util.Log.e("VellumSync", "Sync failed: ${result.error}")
+                    syncStatus.value = "Couldn't sync — check that the folder still exists and this device can reach it."
                 } else {
                     importer.ensureAssets()
                     app.settingsStore.setLastSyncAt(System.currentTimeMillis())
@@ -147,6 +148,11 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
                 syncing.value = false
             }
         }
+    }
+
+    /** Called when the sync sheet closes so stale results don't linger. */
+    fun clearSyncStatus() {
+        if (!syncing.value) syncStatus.value = null
     }
 
     fun setSort(mode: ShelfSort) {
@@ -198,6 +204,9 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
             importing.value = true
             try {
                 importer.importFromUri(uri)
+            } catch (e: Exception) {
+                android.util.Log.e("VellumImport", "Picker import failed for $uri", e)
+                app.importNotices.tryEmit("Couldn't import that file")
             } finally {
                 importing.value = false
             }
