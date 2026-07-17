@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon silhouette: the book cover with the ribbon knocked out via
+     even-odd fill, so the mark stays legible in a single tint. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#000000"
+        android:fillType="evenOdd"
+        android:pathData="M41,32 h26 a5,5 0 0 1 5,5 v34 a5,5 0 0 1 -5,5 h-26 a5,5 0 0 1 -5,-5 v-34 a5,5 0 0 1 5,-5 z M57,32 h9 v22 l-4.5,-5.5 l-4.5,5.5 z" />
+</vector>

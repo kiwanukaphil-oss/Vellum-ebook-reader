@@ -8,7 +8,9 @@
     <application
         android:name=".VellumApp"
         android:label="Vellum"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Vellum"
+        android:enableOnBackInvokedCallback="true"
         android:supportsRtl="true">
 
         <activity

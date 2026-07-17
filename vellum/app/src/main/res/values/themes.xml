@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window-level chrome: linen launch background and splash so cold start
+         no longer flashes stock white/purple. Compose theming lives in
+         VellumTheme.kt; this only covers the pre-Compose window. -->
+    <style name="Theme.Vellum" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/vellum_linen</item>
+        <item name="android:windowSplashScreenBackground">@color/vellum_linen</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

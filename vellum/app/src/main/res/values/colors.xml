@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ink & Linen anchors, mirrored from VellumTheme.kt for window/launcher use. -->
+    <color name="vellum_linen">#FCFCFB</color>
+    <color name="vellum_night">#17171A</color>
+    <color name="vellum_ink_blue">#1F3A5F</color>
+    <color name="vellum_rust">#B85C38</color>
+</resources>
