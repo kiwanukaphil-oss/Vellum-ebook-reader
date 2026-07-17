@@ -237,6 +237,8 @@ Three measured cold launches of the current debug APK on the configured API 36 e
 
 ### 27. Build tool versions emit repeated Kotlin metadata rewrite failures
 
+**Resolved 2026-07-17:** AGP bumped 8.11.1 → 8.13.2 (Gradle wrapper already at 8.13). A full clean `assembleDebug` now passes on the first attempt with no D8 metadata errors; the intermittent first-attempt `dexBuilderDebug` crashes are gone.
+
 The debug build completes, but D8 repeatedly reports unexpected errors while rewriting Kotlin metadata and warns that the Kotlin version is newer than the version understood by the bundled R8. This makes release shrinking and metadata processing unreliable until the toolchain is aligned.
 
 Relevant configuration:
