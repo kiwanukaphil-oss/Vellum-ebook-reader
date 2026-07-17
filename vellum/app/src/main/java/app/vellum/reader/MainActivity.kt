@@ -6,6 +6,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContentScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
@@ -20,6 +26,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -31,6 +38,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.vellum.reader.comic.ComicReaderScreen
 import app.vellum.reader.core.data.BookEntity
+import app.vellum.reader.core.theme.LocalNavAnimatedVisibilityScope
+import app.vellum.reader.core.theme.LocalSharedTransitionScope
 import app.vellum.reader.core.theme.VellumTheme
 import app.vellum.reader.home.ReadingScreen
 import app.vellum.reader.insights.InsightsScreen
@@ -87,6 +96,13 @@ private fun readerRouteFor(format: String, uuid: String): String = when (format)
     else -> "reader/$uuid"
 }
 
+/** Exposes the destination's transition scope so shared elements can animate. */
+@Composable
+private fun AnimatedContentScope.ProvideNavAnimation(content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this, content = content)
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun VellumNavHost() {
     val navController = rememberNavController()
@@ -99,6 +115,8 @@ private fun VellumNavHost() {
     // The nav bar only exists on the four top-level tabs; readers and search
     // keep the full screen. contentWindowInsets is zeroed so those full-bleed
     // destinations receive no phantom bottom padding.
+    SharedTransitionLayout {
+    CompositionLocalProvider(LocalSharedTransitionScope provides this@SharedTransitionLayout) {
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
@@ -126,15 +144,24 @@ private fun VellumNavHost() {
             navController = navController,
             startDestination = "library",
             modifier = Modifier.padding(padding).consumeWindowInsets(padding),
+            // Calm fades — motion comes from the cover container transform.
+            enterTransition = { fadeIn(tween(260)) },
+            exitTransition = { fadeOut(tween(260)) },
+            popEnterTransition = { fadeIn(tween(260)) },
+            popExitTransition = { fadeOut(tween(260)) },
         ) {
             composable("library") {
-                LibraryScreen(
-                    onOpenBook = openBook,
-                    onOpenSearch = { navController.navigate("search") },
-                )
+                ProvideNavAnimation {
+                    LibraryScreen(
+                        onOpenBook = openBook,
+                        onOpenSearch = { navController.navigate("search") },
+                    )
+                }
             }
             composable("reading") {
-                ReadingScreen(onOpenBook = openBook)
+                ProvideNavAnimation {
+                    ReadingScreen(onOpenBook = openBook)
+                }
             }
             composable("notes") {
                 NotesScreen(
@@ -151,14 +178,18 @@ private fun VellumNavHost() {
                 arguments = listOf(navArgument("bookUuid") { type = NavType.StringType }),
             ) { entry ->
                 val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
-                ComicReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
+                ProvideNavAnimation {
+                    ComicReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
+                }
             }
             composable(
                 route = "pdf/{bookUuid}",
                 arguments = listOf(navArgument("bookUuid") { type = NavType.StringType }),
             ) { entry ->
                 val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
-                PdfReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
+                ProvideNavAnimation {
+                    PdfReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
+                }
             }
             composable(
                 route = "search?bookUuid={bookUuid}",
@@ -182,14 +213,18 @@ private fun VellumNavHost() {
                 ),
             ) { entry ->
                 val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
-                ReaderScreen(
-                    bookUuid = bookUuid,
-                    initialChapter = entry.arguments?.getInt("chapter") ?: -1,
-                    initialOffset = entry.arguments?.getInt("offset") ?: -1,
-                    onBack = { navController.popBackStack() },
-                    onSearchInBook = { uuid -> navController.navigate("search?bookUuid=$uuid") },
-                )
+                ProvideNavAnimation {
+                    ReaderScreen(
+                        bookUuid = bookUuid,
+                        initialChapter = entry.arguments?.getInt("chapter") ?: -1,
+                        initialOffset = entry.arguments?.getInt("offset") ?: -1,
+                        onBack = { navController.popBackStack() },
+                        onSearchInBook = { uuid -> navController.navigate("search?bookUuid=$uuid") },
+                    )
+                }
             }
         }
+    }
+    }
     }
 }

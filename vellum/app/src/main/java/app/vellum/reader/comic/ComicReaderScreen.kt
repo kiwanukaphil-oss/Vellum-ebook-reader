@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.ComicPanelEntity
+import app.vellum.reader.core.theme.sharedCoverBounds
 import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
@@ -86,7 +87,7 @@ fun ComicReaderScreen(bookUuid: String, onBack: () -> Unit) {
     val ui by viewModel.ui.collectAsState()
     val panelsByPage by viewModel.panelsByPage.collectAsState()
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize().sharedCoverBounds(bookUuid).background(Color.Black)) {
         when {
             ui.loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color.White)
             ui.error != null -> Text(ui.error!!, color = Color.White, modifier = Modifier.align(Alignment.Center))

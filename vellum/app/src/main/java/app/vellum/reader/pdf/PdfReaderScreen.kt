@@ -70,6 +70,7 @@ import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.PdfStrokeEntity
 import app.vellum.reader.core.model.HighlightColors
 import app.vellum.reader.core.settings.ReaderSettings
+import app.vellum.reader.core.theme.sharedCoverBounds
 
 /** Inverts page colors for dark themes — the classic PDF night mode. */
 private val invertFilter = ColorFilter.colorMatrix(
@@ -98,7 +99,7 @@ fun PdfReaderScreen(bookUuid: String, onBack: () -> Unit) {
     val strokesByPage by viewModel.strokesByPage.collectAsState()
     val theme = settings.theme
 
-    Box(modifier = Modifier.fillMaxSize().background(theme.pageColor)) {
+    Box(modifier = Modifier.fillMaxSize().sharedCoverBounds(bookUuid).background(theme.pageColor)) {
         when {
             ui.loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             ui.error != null -> Text(ui.error!!, modifier = Modifier.align(Alignment.Center))

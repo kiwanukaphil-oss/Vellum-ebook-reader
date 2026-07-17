@@ -88,6 +88,7 @@ import app.vellum.reader.core.data.AnnotationEntity
 import app.vellum.reader.core.model.HighlightColors
 import app.vellum.reader.core.model.ReadingTheme
 import app.vellum.reader.core.settings.ReaderSettings
+import app.vellum.reader.core.theme.sharedCoverBounds
 import app.vellum.reader.core.settings.TurnStyle
 import app.vellum.reader.reader.ambient.PageRustle
 import app.vellum.reader.reader.layout.ChapterPaginator
@@ -202,7 +203,7 @@ fun ReaderScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(theme.pageColor)) {
+    Box(modifier = Modifier.fillMaxSize().sharedCoverBounds(bookUuid).background(theme.pageColor)) {
         // Page paint extends behind the system bars (outer Box); the measured
         // reading viewport does not, so no line of text sits under the status
         // bar or the gesture area.

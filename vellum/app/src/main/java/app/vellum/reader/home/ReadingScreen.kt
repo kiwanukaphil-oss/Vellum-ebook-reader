@@ -39,6 +39,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.data.ReadingPositionEntity
+import app.vellum.reader.core.theme.sharedCoverBounds
 import coil.compose.AsyncImage
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -222,6 +223,7 @@ private fun BookCover(book: BookEntity, width: androidx.compose.ui.unit.Dp) {
         modifier = Modifier
             .width(width)
             .height(width * 3 / 2)
+            .sharedCoverBounds(book.uuid)
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainerHighest),
     ) {
