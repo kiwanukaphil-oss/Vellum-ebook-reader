@@ -1,0 +1,27 @@
+# Android / Gradle
+*.iml
+.gradle/
+vellum/.gradle/
+vellum/local.properties
+vellum/build/
+vellum/app/build/
+vellum/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.hprof
+
+# IDE
+.idea/
+*.swp
+
+# Assistant tool state
+.agents/
+.codex/
+.claude/
+
+# Local test media (not project sources)
+*.cbr
+*.cbz
+*.epub
