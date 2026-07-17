@@ -3,6 +3,14 @@ package app.vellum.reader.library
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -55,9 +63,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,6 +77,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.settings.ReaderSettings
+import app.vellum.reader.core.theme.sharedCoverBounds
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import java.io.File
@@ -121,7 +133,13 @@ fun LibraryScreen(
 
     Scaffold(
         topBar = {
-            if (selectionMode) {
+            // Crossfade instead of a hard swap when selection mode toggles.
+            AnimatedContent(
+                targetState = selectionMode,
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+                label = "libraryTopBar",
+            ) { inSelection ->
+            if (inSelection) {
                 TopAppBar(
                     title = { Text("${selected.size} selected") },
                     navigationIcon = {
@@ -175,9 +193,14 @@ fun LibraryScreen(
                     },
                 )
             }
+            }
         },
         floatingActionButton = {
-            if (!selectionMode) {
+            AnimatedVisibility(
+                visible = !selectionMode,
+                enter = scaleIn(tween(180)) + fadeIn(tween(180)),
+                exit = scaleOut(tween(140)) + fadeOut(tween(140)),
+            ) {
                 FloatingActionButton(onClick = {
                     // Comic archives surface under many mimes depending on the
                     // file manager (rar/zip variants) — list them all so .cbr
@@ -246,6 +269,7 @@ fun LibraryScreen(
                     )
                 }
             } else {
+                val haptics = LocalHapticFeedback.current
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(105.dp),
                     contentPadding = PaddingValues(16.dp),
@@ -260,7 +284,11 @@ fun LibraryScreen(
                                 if (selectionMode) viewModel.toggleSelection(book.uuid)
                                 else onOpenBook(book)
                             },
-                            onLongClick = { viewModel.toggleSelection(book.uuid) },
+                            onLongClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleSelection(book.uuid)
+                            },
+                            modifier = Modifier.animateItem(),
                         )
                     }
                 }
@@ -323,28 +351,36 @@ private fun BookCard(
     isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        modifier = modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         Box {
-            val coverFile = book.coverPath?.let { File(it) }?.takeIf { it.exists() }
+            // Tighter radii on the spine edge, like a hardcover seen face-on.
+            val spineShape = RoundedCornerShape(topStart = 2.dp, topEnd = 6.dp, bottomEnd = 6.dp, bottomStart = 2.dp)
+            // Remembered: File.exists() is disk I/O and this runs per card.
+            val coverFile = remember(book.coverPath) {
+                book.coverPath?.let { File(it) }?.takeIf { it.exists() }
+            }
             val coverModifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.66f)
+                .sharedCoverBounds(book.uuid)
                 .then(
                     if (isSelected) {
-                        Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp))
+                        Modifier.border(3.dp, MaterialTheme.colorScheme.primary, spineShape)
                     } else {
                         Modifier
                     },
                 )
+                .clip(spineShape)
             if (coverFile != null) {
                 AsyncImage(
                     model = coverFile,
                     contentDescription = "Cover of ${book.title}",
                     contentScale = ContentScale.Crop,
-                    modifier = coverModifier.background(Color.LightGray, RoundedCornerShape(6.dp)),
+                    modifier = coverModifier.background(MaterialTheme.colorScheme.surfaceContainerHighest),
                 )
             } else {
                 FallbackCover(book, coverModifier)
@@ -398,7 +434,7 @@ private fun FallbackCover(book: BookEntity, modifier: Modifier) {
     val background = palette[book.uuid.hashCode().absoluteValue % palette.size]
     Box(
         modifier = modifier
-            .background(background, RoundedCornerShape(6.dp))
+            .background(background)
             .padding(10.dp),
         contentAlignment = Alignment.Center,
     ) {
