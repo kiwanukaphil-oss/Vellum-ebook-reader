@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.ShaderBrush
@@ -13,10 +14,13 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import app.vellum.reader.core.model.ReadingTheme
 import app.vellum.reader.reader.layout.PaginatedChapter
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -61,6 +65,8 @@ object ReaderContentRenderer {
         val highlights: List<HighlightSpan> = emptyList(),
         val selection: HighlightSpan? = null,
         val selectionHandleRadiusPx: Float = 16f,
+        /** Chapter images keyed by publication-relative src. */
+        val images: Map<String, ImageBitmap> = emptyMap(),
     )
 
     fun DrawScope.drawSpread(spec: SpreadSpec) {
@@ -71,6 +77,10 @@ object ReaderContentRenderer {
             val xOffset = spec.marginPx + column * (spec.contentWidthPx + spec.marginPx)
             page.slices.forEach { slice ->
                 val block = spec.paginated.measured[slice.blockIndex]
+                if (block.imageSrc != null) {
+                    drawImageSlice(spec, block, slice, xOffset)
+                    return@forEach
+                }
                 val sliceTop = block.layout.getLineTop(slice.firstLine)
                 val sliceHeight = block.layout.getLineBottom(slice.lastLine) - sliceTop
                 clipRect(
@@ -127,6 +137,30 @@ object ReaderContentRenderer {
                 ink = spec.theme.inkColor,
             )
         }
+    }
+
+    /** Draws one image block centered in its column at the packed offset. */
+    private fun DrawScope.drawImageSlice(
+        spec: SpreadSpec,
+        block: app.vellum.reader.reader.layout.MeasuredBlock,
+        slice: app.vellum.reader.reader.layout.PageSlice,
+        xOffset: Float,
+    ) {
+        val drawn = block.imageSize ?: return
+        val bitmap = spec.images[block.imageSrc] ?: return
+        val dstWidth = drawn.width.roundToInt().coerceAtLeast(1)
+        val dstHeight = drawn.height.roundToInt().coerceAtLeast(1)
+        drawImage(
+            image = bitmap,
+            srcOffset = IntOffset.Zero,
+            srcSize = IntSize(bitmap.width, bitmap.height),
+            dstOffset = IntOffset(
+                x = (xOffset + (spec.contentWidthPx - dstWidth) / 2f).roundToInt(),
+                y = (spec.marginPx + slice.y).roundToInt(),
+            ),
+            dstSize = IntSize(dstWidth, dstHeight),
+            filterQuality = FilterQuality.Medium,
+        )
     }
 
     /** Draws the part of [span] that falls inside one slice, block-locally. */

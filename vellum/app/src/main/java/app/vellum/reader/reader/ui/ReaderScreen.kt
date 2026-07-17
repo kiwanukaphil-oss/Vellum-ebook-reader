@@ -251,6 +251,7 @@ fun ReaderScreen(
                         ReaderContentRenderer.HighlightSpan(it.startChar, it.endChar, Color(0xFF5B8DEF))
                     },
                     selectionHandleRadiusPx = with(density) { 7.dp.toPx() },
+                    images = viewModel.imagesFor(chapterIndex),
                 )
             }
 

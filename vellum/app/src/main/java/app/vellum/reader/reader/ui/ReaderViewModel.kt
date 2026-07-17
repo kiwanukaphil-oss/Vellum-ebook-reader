@@ -7,6 +7,11 @@ import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.ReadingPositionEntity
 import app.vellum.reader.epub.OpenedEpub
 import app.vellum.reader.epub.TocEntry
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.unit.IntSize
+import app.vellum.reader.reader.html.BlockKind
 import app.vellum.reader.reader.html.ContentBlock
 import app.vellum.reader.reader.html.HtmlBlockParser
 import app.vellum.reader.reader.layout.ChapterPaginator
@@ -133,6 +138,11 @@ class ReaderViewModel(
     /** Observed by the page canvas; state map so recomposition sees new chapters. */
     private val paginatedCache = mutableStateMapOf<Int, PaginatedChapter>()
 
+    /** Decoded chapter images (src → bitmap), downscaled to the column width. */
+    private val imagesCache = mutableStateMapOf<Int, Map<String, ImageBitmap>>()
+
+    fun imagesFor(chapterIndex: Int): Map<String, ImageBitmap> = imagesCache[chapterIndex] ?: emptyMap()
+
     /** Character offset the current/next layout should scroll to. */
     private var pendingCharOffset = 0
 
@@ -185,6 +195,7 @@ class ReaderViewModel(
         paginator = newPaginator
         spreadSize = newPaginator.columns
         paginatedCache.clear()
+        imagesCache.clear() // decoded for the old column width
         repaginateCurrentChapter()
     }
 
@@ -338,11 +349,52 @@ class ReaderViewModel(
                 val html = opened.chapterHtml(chapterIndex) ?: return@withContext null
                 HtmlBlockParser.parse(html)
             }
-            pager.paginate(blocks)
+            val images = imagesCache.getOrPut(chapterIndex) {
+                loadChapterImages(opened, chapterIndex, blocks, pager.contentWidthPx)
+            }
+            pager.paginate(blocks, images.mapValues { (_, bitmap) -> IntSize(bitmap.width, bitmap.height) })
         }?.also {
             paginatedCache[chapterIndex] = it
             reanchorAnnotations(chapterIndex)
         }
+    }
+
+    /**
+     * Fetches and decodes every image a chapter references, subsampled to at
+     * most the column width — full-resolution decodes of illustration scans
+     * would dwarf the text caches. Unresolvable images just don't render.
+     */
+    private suspend fun loadChapterImages(
+        opened: OpenedEpub,
+        chapterIndex: Int,
+        blocks: List<ContentBlock>,
+        maxWidthPx: Int,
+    ): Map<String, ImageBitmap> {
+        val sources = blocks.filter { it.kind == BlockKind.IMAGE }.mapNotNull { it.imageSrc }.distinct()
+        if (sources.isEmpty()) return emptyMap()
+        val chapterHref = opened.chapterHref(chapterIndex)
+        val decoded = mutableMapOf<String, ImageBitmap>()
+        sources.forEach { src ->
+            val bytes = opened.resourceBytes(chapterHref, src) ?: return@forEach
+            decodeSubsampled(bytes, maxWidthPx)?.let { decoded[src] = it }
+        }
+        return decoded
+    }
+
+    private fun decodeSubsampled(bytes: ByteArray, maxWidthPx: Int): ImageBitmap? = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            null
+        } else {
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = 1
+                while (bounds.outWidth / (inSampleSize * 2) >= maxWidthPx.coerceAtLeast(1)) inSampleSize *= 2
+            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+        }
+    } catch (e: Exception) {
+        null
     }
 
     private fun currentPage() =

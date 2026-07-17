@@ -42,6 +42,11 @@ object HtmlBlockParser {
                     else emitBlock(child, BlockKind.QUOTE, out)
                 }
                 "li" -> emitBlock(child, BlockKind.BODY, out, prefix = "• ")
+                "img" -> emitImage(child.attr("src"), out)
+                "image" -> emitImage(child.attr("xlink:href").ifBlank { child.attr("href") }, out)
+                "svg" -> child.select("image").firstOrNull()?.let {
+                    emitImage(it.attr("xlink:href").ifBlank { it.attr("href") }, out)
+                }
                 "ol", "ul", "div", "section", "article", "main", "aside", "figure", "nav", "header", "footer", "table", "tr", "td" ->
                     collectBlocks(child, out)
                 "hr" -> Unit
@@ -55,6 +60,13 @@ object HtmlBlockParser {
         }
     }
 
+    /** Local resources only — remote image URLs would break the privacy rule. */
+    private fun emitImage(src: String?, out: MutableList<ContentBlock>) {
+        val cleaned = src?.trim().orEmpty()
+        if (cleaned.isEmpty() || cleaned.startsWith("http://") || cleaned.startsWith("https://")) return
+        out.add(ContentBlock(AnnotatedString(""), BlockKind.IMAGE, imageSrc = cleaned))
+    }
+
     private fun collectQuoteParagraphs(quote: Element, out: MutableList<ContentBlock>) {
         for (p in quote.children()) {
             if (p.tagName() == "p") emitBlock(p, BlockKind.QUOTE, out) else collectBlocks(p, out)
@@ -66,7 +78,16 @@ object HtmlBlockParser {
             if (prefix.isNotEmpty()) append(prefix)
             appendInline(element, bold = false, italic = false)
         }
-        if (text.text.isNotBlank()) out.add(ContentBlock(trimEdges(text), kind))
+        if (text.text.isNotBlank()) {
+            out.add(ContentBlock(trimEdges(text), kind))
+        } else {
+            // Image-only paragraph (<p><img/></p> is the common EPUB shape):
+            // surface the images instead of dropping the block.
+            element.select("img").forEach { emitImage(it.attr("src"), out) }
+            element.select("image").forEach {
+                emitImage(it.attr("xlink:href").ifBlank { it.attr("href") }, out)
+            }
+        }
     }
 
     /**

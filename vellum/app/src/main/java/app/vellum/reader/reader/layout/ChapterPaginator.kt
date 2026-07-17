@@ -1,5 +1,7 @@
 package app.vellum.reader.reader.layout
 
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -10,6 +12,7 @@ import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.vellum.reader.core.fonts.VellumFonts
@@ -18,11 +21,17 @@ import app.vellum.reader.reader.html.BlockKind
 import app.vellum.reader.reader.html.ContentBlock
 import kotlin.math.roundToInt
 
-/** One measured block plus its cumulative character offset within the chapter. */
+/**
+ * One measured block plus its cumulative character offset within the chapter.
+ * Image blocks carry an empty layout (keeps every text API safe) plus their
+ * final drawn size; [imageSize] is null when the image failed to resolve.
+ */
 class MeasuredBlock(
     val layout: TextLayoutResult,
     val charStart: Int,
     val indentPx: Float,
+    val imageSrc: String? = null,
+    val imageSize: Size? = null,
 )
 
 /** A vertical slice of one block: lines [firstLine..lastLine] drawn at page offset [y]. */
@@ -78,16 +87,26 @@ class ChapterPaginator(
     val contentHeightPx = viewportHeightPx - 2 * marginPx
     val pageMarginPx = marginPx
 
-    fun paginate(blocks: List<ContentBlock>): PaginatedChapter {
-        val measured = measureBlocks(blocks)
+    fun paginate(blocks: List<ContentBlock>, imageSizes: Map<String, IntSize> = emptyMap()): PaginatedChapter {
+        val measured = measureBlocks(blocks, imageSizes)
         val pages = packIntoPages(measured)
         val totalChars = measured.lastOrNull()?.let { it.charStart + it.layout.layoutInput.text.length } ?: 0
         return PaginatedChapter(measured, pages, totalChars)
     }
 
-    private fun measureBlocks(blocks: List<ContentBlock>): List<MeasuredBlock> {
+    private fun measureBlocks(blocks: List<ContentBlock>, imageSizes: Map<String, IntSize>): List<MeasuredBlock> {
         var charCursor = 0
         return blocks.map { block ->
+            if (block.kind == BlockKind.IMAGE) {
+                val layout = measurer.measure(AnnotatedString(""), style = styleFor(BlockKind.BODY))
+                return@map MeasuredBlock(
+                    layout = layout,
+                    charStart = charCursor,
+                    indentPx = 0f,
+                    imageSrc = block.imageSrc,
+                    imageSize = imageSizes[block.imageSrc]?.let(::scaledImageSize),
+                )
+            }
             val indent = if (block.kind == BlockKind.QUOTE) quoteIndentPx else 0f
             val width = (contentWidthPx - 2 * indent).roundToInt().coerceAtLeast(1)
             val layout = measurer.measure(
@@ -97,6 +116,18 @@ class ChapterPaginator(
             )
             MeasuredBlock(layout, charCursor, indent).also { charCursor += block.text.length }
         }
+    }
+
+    /** Fits an image's intrinsic size into one column, preserving aspect. */
+    private fun scaledImageSize(intrinsic: IntSize): Size? {
+        if (intrinsic.width <= 0 || intrinsic.height <= 0) return null
+        var w = kotlin.math.min(intrinsic.width.toFloat(), contentWidthPx.toFloat())
+        var h = w * intrinsic.height / intrinsic.width
+        if (h > contentHeightPx) {
+            h = contentHeightPx
+            w = h * intrinsic.width / intrinsic.height
+        }
+        return Size(w, h)
     }
 
     /**
@@ -128,6 +159,15 @@ class ChapterPaginator(
         }
 
         measured.forEachIndexed { blockIndex, block ->
+            if (block.imageSrc != null) {
+                // Images are unbreakable: place whole, or push to a new page.
+                val image = block.imageSize ?: return@forEachIndexed
+                if (slices.isNotEmpty()) y += blockSpacingPx
+                if (image.height > contentHeightPx - y && slices.isNotEmpty()) closePage()
+                slices.add(PageSlice(blockIndex, 0, 0, y))
+                y += image.height
+                return@forEachIndexed
+            }
             if (slices.isNotEmpty()) y += blockSpacingPx
             val lineCount = block.layout.lineCount
             var line = 0
@@ -171,7 +211,7 @@ class ChapterPaginator(
         val bodySize = typography.fontSizeSp
         val lineHeight = (typography.fontSizeSp * typography.lineHeightMultiplier)
         return when (kind) {
-            BlockKind.BODY -> TextStyle(
+            BlockKind.BODY, BlockKind.IMAGE -> TextStyle(
                 fontFamily = fontFamily,
                 fontSize = bodySize.sp,
                 lineHeight = lineHeight.sp,
