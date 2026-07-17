@@ -121,17 +121,32 @@ class SyncEngine(private val app: VellumApp) {
         books.filter { it.deletedAt == null }.forEach { book ->
             val local = File(app.booksDir, book.fileName)
             val remote = booksDir.findFile(book.fileName)
+            // Both directions stage into a .part file and rename into place:
+            // an interrupted copy must never leave a truncated file that
+            // `exists()` and is therefore never re-transferred.
             if (!local.exists() && remote != null) {
-                app.contentResolver.openInputStream(remote.uri)?.use { input ->
-                    local.outputStream().use { input.copyTo(it) }
+                val staging = File(app.booksDir, "${book.fileName}.part")
+                val copied = try {
+                    app.contentResolver.openInputStream(remote.uri)?.use { input ->
+                        staging.outputStream().use { input.copyTo(it) }
+                        true
+                    } ?: false
+                } catch (e: Exception) {
+                    false
                 }
-                pulled++
+                if (copied && staging.renameTo(local)) pulled++ else staging.delete()
             } else if (local.exists() && remote == null) {
-                booksDir.createFile("application/octet-stream", book.fileName)?.let { target ->
-                    app.contentResolver.openOutputStream(target.uri)?.use { output ->
-                        local.inputStream().use { it.copyTo(output) }
+                booksDir.findFile("${book.fileName}.part")?.delete()
+                booksDir.createFile("application/octet-stream", "${book.fileName}.part")?.let { staging ->
+                    val copied = try {
+                        app.contentResolver.openOutputStream(staging.uri)?.use { output ->
+                            local.inputStream().use { it.copyTo(output) }
+                            true
+                        } ?: false
+                    } catch (e: Exception) {
+                        false
                     }
-                    pushed++
+                    if (copied && staging.renameTo(book.fileName)) pushed++ else staging.delete()
                 }
             }
         }
@@ -147,7 +162,14 @@ class SyncEngine(private val app: VellumApp) {
                 emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
             )
         val json = app.contentResolver.openInputStream(file.uri)?.bufferedReader()?.readText() ?: "{}"
-        val root = JSONObject(json)
+        // A torn or corrupt bundle must not brick sync forever: treat it as
+        // empty — the LWW merge rebuilds it from local rows, and the other
+        // device re-contributes its rows on its next sync.
+        val root = try {
+            JSONObject(json)
+        } catch (e: Exception) {
+            JSONObject()
+        }
         fun arr(name: String): List<JSONObject> {
             val array = root.optJSONArray(name) ?: JSONArray()
             return (0 until array.length()).map { array.getJSONObject(it) }
@@ -265,10 +287,24 @@ class SyncEngine(private val app: VellumApp) {
                 },
             ),
         )
-        val target = dir.findFile("vellum-sync.json") ?: dir.createFile("application/json", "vellum-sync.json")
-        target?.let { file ->
-            app.contentResolver.openOutputStream(file.uri, "wt")?.bufferedWriter()?.use { it.write(root.toString()) }
+        // Stage-then-swap: an in-place overwrite torn by a crash or by the
+        // paired sync tool shipping a half-write leaves invalid JSON that
+        // would fail every later sync. A *missing* bundle is safely rebuilt,
+        // so the worst interruption here costs nothing.
+        dir.findFile("vellum-sync.json.tmp")?.delete()
+        val staging = dir.createFile("application/json", "vellum-sync.json.tmp") ?: return
+        val written = try {
+            app.contentResolver.openOutputStream(staging.uri, "wt")?.bufferedWriter()
+                ?.use { it.write(root.toString()) } != null
+        } catch (e: Exception) {
+            false
         }
+        if (!written) {
+            staging.delete()
+            return
+        }
+        dir.findFile("vellum-sync.json")?.delete()
+        staging.renameTo("vellum-sync.json")
     }
 
     // ---- JSON mapping helpers --------------------------------------------
