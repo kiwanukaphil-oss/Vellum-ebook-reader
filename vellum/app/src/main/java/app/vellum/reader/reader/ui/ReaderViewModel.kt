@@ -835,6 +835,7 @@ class ReaderViewModel(
         val page = currentPage()
         val opened = epub
         if (page != null && opened != null) {
+            val total = paginatedCache[state.chapterIndex]?.totalChars ?: 0
             runBlocking {
                 app.bookDao.upsertPosition(
                     ReadingPositionEntity(
@@ -842,7 +843,7 @@ class ReaderViewModel(
                         chapterIndex = state.chapterIndex,
                         chapterHref = opened.chapterHref(state.chapterIndex),
                         charOffset = page.startChar,
-                        progression = 0.0,
+                        progression = if (total > 0) page.startChar.toDouble() / total else 0.0,
                         updatedAt = System.currentTimeMillis(),
                     ),
                 )
