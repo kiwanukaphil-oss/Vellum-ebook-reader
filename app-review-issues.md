@@ -26,11 +26,13 @@ Evidence:
 
 ### 3. Sync does not remove deleted book files from the shared folder
 
-Tombstoned books are skipped during transfer, but their existing files are not removed from the sync folder. Deleted book content therefore remains in shared storage indefinitely and continues consuming space.
+Tombstoned books are skipped during transfer, but their existing files are not removed from the sync folder. Deleted book content therefore remains in shared storage indefinitely and continues consuming space. The receiving device has the same gap: when a tombstone arrives via merge, `applyLocally` only upserts the row — the local book file, cover image, and FTS rows are never cleaned up (compare the thorough local-delete path in `LibraryViewModel.deleteBook`), so deleted books remain on disk and searchable on the second device.
 
 Evidence:
 
 - `vellum/app/src/main/java/app/vellum/reader/sync/SyncEngine.kt:121-137`
+- `vellum/app/src/main/java/app/vellum/reader/sync/SyncEngine.kt:98-113`
+- `vellum/app/src/main/java/app/vellum/reader/library/LibraryViewModel.kt:263-275`
 
 ### 4. Reading-time statistics include inactive and background time
 
@@ -251,5 +253,263 @@ Evidence:
 
 ### 29. The workspace is not recognized as a Git repository
 
-The workspace root contains an empty `.git` directory. Git commands report that the project is not a repository, so change history, clean diffs, rollback, and commit verification are unavailable.
+**Resolved 2026-07-17:** repository initialized on branch `main` with a full initial commit (`d66297a`) and a `.gitignore` covering build output, IDE state, and local test media.
+
+The workspace root contained an empty `.git` directory. Git commands reported that the project was not a repository, so change history, clean diffs, rollback, and commit verification were unavailable.
+
+---
+
+# Merged findings — second review pass (2026-07-17)
+
+The issues below were found in the same-day deep review (design system, library, EPUB reader, PDF/comic/search, core/data/sync) and are not covered above. Numbering continues from 29; severities follow the same scale. Proposed enhancements from that review (TOC, scrubber, motion, theming direction, etc.) remain excluded from this document by design.
+
+## Critical
+
+### 30. Reading progress is reset to zero every time a book is closed
+
+The EPUB reader's final position write in `onCleared()` hardcodes `progression = 0.0`, overwriting the correct percent-complete that `persistPosition` computed during the session. Every book close corrupts stored progress, so any progress display (library, sync peers) is wrong.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:833-849` (the write at `:845`)
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:485` (correct computation)
+
+### 31. PDF ink strokes are corrupted on comma-decimal locales
+
+Stroke points serialize with `"%.4f,%.4f".format(...)` using the default locale. On devices set to German, French, and most European locales, decimals render as `0,5123`; the parser splits on commas and produces garbage or dropped points. Ink drawn on those devices is silently destroyed.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfReaderViewModel.kt:111` (serialization)
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfReaderViewModel.kt:158-163` (comma-split parsing)
+
+### 32. Configuration changes re-import the launching intent, and the importer has no duplicate detection
+
+`handleImportIntent(intent)` runs unconditionally in `onCreate`, and the activity's intent survives rotation and process recreation, so an "Open with Vellum" launch re-imports the file on every configuration change. Because `importFromUri` assigns a fresh random UUID and never checks content hash, size, or title, each pass creates a new library entry. (Distinct from the known cross-device pre-first-sync duplication backlog item — this is same-device.)
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/MainActivity.kt:25-33`
+- `vellum/app/src/main/java/app/vellum/reader/library/BookImporter.kt:28-53`
+
+### 33. Insights crashes when two books share a title
+
+The per-book time list keys LazyColumn items by book title while the data is grouped by uuid. Two books with the same title produce duplicate keys, which throws `IllegalArgumentException` at runtime.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/insights/InsightsScreen.kt:145` (key by title)
+- `vellum/app/src/main/java/app/vellum/reader/insights/InsightsScreen.kt:84-87` (grouped by uuid)
+
+## High
+
+### 34. Landscape comic spreads duplicate a page on every swipe
+
+The landscape pager keeps `pageCount` items while `SpreadView(i)` renders pages `(i, i+1)`, so consecutive swipes show spreads (0,1), (1,2), (2,3) — every page after the first appears twice. Correct model is `ceil(n/2)` pager items rendering `(2i, 2i+1)`. RTL ordering compounds the error.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicReaderScreen.kt:95,108-110,353-355`
+
+### 35. Guided-view tap zones are computed in page space and invert after panel zoom
+
+Forward/back tap thirds use untransformed box coordinates, but pointer positions are inverse-transformed through the zoom `graphicsLayer`. Once the camera focuses a panel on the left side of a page, every visible screen tap maps to page-x < 1/3 and navigates backward (mirrored for right-side panels). Panel-by-panel reading only works for center panels.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicReaderScreen.kt:260-262` (page-space thirds)
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicReaderScreen.kt:186-195` (camera transform)
+
+### 36. Renderer close races in-flight page renders
+
+`onCleared` calls `renderer?.close()` without acquiring the render mutex, while a `produceState` render may still be inside `page.render(...)` on the IO dispatcher. Closing PdfRenderer mid-render throws (or crashes natively), and the exception propagates out of `produceState` and kills the app. The comic reader has the same shape with `store?.close()` racing `ComicPageStore.page`.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfReaderViewModel.kt:154`
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfPageRenderer.kt:39-62`
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicReaderViewModel.kt:174`
+
+### 37. Kokoro TTS cancel race can interleave two utterances on one AudioTrack
+
+Starting or re-starting Kokoro playback cancels the previous Job but not the engine; blocking `generate()`/`write()` calls do not observe Job cancellation, and the new job's `resetCancel()` can erase a pause/stop cancel the old job had not yet noticed (it polls once per 250 ms slice). The old utterance keeps playing while the new one starts — two threads writing into the same AudioTrack. Fix shape: `kokoro?.cancel()` before launching, and `resetCancel()` only after `cancelAndJoin()` of the old job.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:528-536,610-617`
+- `vellum/app/src/main/java/app/vellum/reader/reader/tts/KokoroEngine.kt:68-74`
+
+### 38. keepScreenOn leaks past the reader while TTS is playing
+
+`view.keepScreenOn = (ttsStatus == PLAYING)` is a bare side effect during composition on the shared `AndroidComposeView`, with no `DisposableEffect` reset. Navigating back mid-playback leaves the entire app holding the screen awake.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderScreen.kt:141`
+
+### 39. TTS stops at every chapter boundary, and the "end of chapter" sleep mode is a no-op
+
+Both engines call `stopTts()` when the current chapter's chunks are exhausted — there is no continue-into-next-chapter path, so fall-asleep listening breaks at each chapter. Because stopping at chapter end happens unconditionally, the `TtsSleep.END_OF_CHAPTER` setting has no effect (`cycleSleepTimer` only acts on minute values). Committed sleep-timer functionality that does not work as labeled.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:798-801` (system engine)
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:560` (Kokoro)
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:734-744` (sleep modes)
+
+### 40. EPUB images are silently discarded
+
+The block parser drops `img` elements entirely and image-only chapters paginate to zero pages and are skipped. Covers, illustrations, maps, and diagrams vanish with no placeholder or notice — illustrated books render incorrectly.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/reader/html/HtmlBlockParser.kt:98`
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:260-262`
+
+### 41. Rapid taps double-commit a page turn
+
+A second tap mid-curl re-enters `beginCurl`, obtains the in-flight session, and runs `settleCurl` concurrently: `commitTurn` fires twice (double-counting `pagesTurned`, double haptic/rustle) and two `animateTo` calls fight over the same Animatable. Needs an already-settling guard.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderScreen.kt:276,301-312`
+
+### 42. PDF and comic zoom never re-renders — text becomes upscaled raster
+
+PDF pages render once at view width and pinch scales that bitmap up to 4x via `graphicsLayer`; comics scale to 5x a bitmap that was decoded with `inSampleSize` to at most ~2x display width. Zoomed text and line art are blurry. Requires re-rendering the page (or visible region) at the settled scale.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfReaderScreen.kt:149-151,195`
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicReaderScreen.kt:163-164,238`
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicSource.kt:125-130`
+
+### 43. Intent imports run in an unsupervised scope — one exception kills the app
+
+VIEW/SEND imports launch into `app.appScope`, which has no `CoroutineExceptionHandler`, and only the copy step is wrapped in try/catch. Any exception thrown later in registration (Room upsert, FTS indexing, Readium/ZipFile quirks, rename edge cases) propagates as an unhandled coroutine exception and crashes the process.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/MainActivity.kt:46`
+- `vellum/app/src/main/java/app/vellum/reader/VellumApp.kt:57`
+- `vellum/app/src/main/java/app/vellum/reader/library/BookImporter.kt:30-37`
+
+## Medium
+
+### 44. PDF and comic progression never reaches 100%
+
+`progression = pageIndex / pageCount` yields (n−1)/n on the last page; finished books show ~99% wherever progress is displayed. Should be `(pageIndex + 1) / pageCount` or a clamped equivalent.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfReaderViewModel.kt:100`
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicReaderViewModel.kt:113`
+
+### 45. Full-text reindex is a non-atomic delete-then-insert
+
+`indexFullText` deletes all FTS rows for a book, then inserts per chapter. Process death mid-index leaves a partial index that `chapterCountForBook > 0` treats as complete forever, so later chapters become permanently unsearchable. Wrap in a transaction. (Extends issue 8.)
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/library/BookImporter.kt:279-288,216`
+
+### 46. No database indices on any bookUuid column
+
+`annotations`, `pdf_strokes`, `comic_panels`, and `reading_sessions` declare no indices, yet every hot query filters by `bookUuid`, and the `observeForBook` flows feeding Compose re-run full-table scans on any table write. Fix is an additive v7 migration (`CREATE INDEX`) — never destructive, per the settled migration rule.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/core/data/Entities.kt:50,70,84,103`
+- `vellum/app/src/main/java/app/vellum/reader/core/data/AnnotationDao.kt:12`, `PdfStrokeDao.kt:12,18`, `ComicPanelDao.kt:12,18,21`
+
+### 47. Sync merge application is non-transactional with per-row lookups
+
+`applyLocally` issues one implicit transaction per row (potentially thousands) and a per-book `byUuid()` query just to preserve cover paths. Slow, and a crash mid-apply leaves a half-merged database until the next sync. Wrap in `withTransaction` (room-ktx already present) and prefetch local books into a map.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/sync/SyncEngine.kt:98-113`
+
+### 48. PDF ink preview ignores the selected colour
+
+While drawing, strokes preview in hardcoded rose regardless of the chosen markup colour, then snap to the correct colour on finger-up.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfReaderScreen.kt:231`
+- `vellum/app/src/main/java/app/vellum/reader/pdf/PdfReaderViewModel.kt:118`
+
+### 49. Failed page decode shows an infinite spinner
+
+A corrupt or missing comic page entry leaves the bitmap null and the loading spinner spinning forever, with no error state or retry. A PDF render exception is the same terminal state (when not crashing outright per issue 36).
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicReaderScreen.kt:172-175`
+- `vellum/app/src/main/java/app/vellum/reader/comic/ComicSource.kt:124,130`
+
+### 50. Search reloads the entire library per keystroke and never cancels stale queries
+
+Every debounced query fetches all books just to build a uuid→title map (also subject to the LIMIT 30 bug, issue 6), and sequential `collect` means a slow search delays the next instead of being cancelled (`collectLatest`).
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/search/SearchViewModel.kt:47,65`
+
+### 51. Comic import leaks archive handles on failure
+
+If cover extraction throws during comic registration, the catch returns without closing the comic source/page store, leaking open file handles.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/library/BookImporter.kt:113-115`
+
+### 52. LIKE wildcards are not escaped in title/author search
+
+`%` and `_` in a query are treated as wildcards — searching "100%" misbehaves.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/core/data/BookDao.kt:58-60`
+
+### 53. Reader caches grow without bound and are mutated across threads
+
+`blocksCache`/`paginatedCache` are never evicted (each `PaginatedChapter` retains a `TextLayoutResult` per block — a long session holds every layout ever built), and `blocksCache` is a plain `HashMap` mutated on `Dispatchers.Default` while gesture-path reads can overlap — a concurrent-modification risk.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/reader/ui/ReaderViewModel.kt:121-124,325-330`
+
+### 54. Sync bundle rewrites on every launch and tombstones are never pruned
+
+Auto-sync on library open rewrites `vellum-sync.json` unconditionally with a fresh `exportedAt` even when nothing changed, so the paired sync tool re-uploads the whole bundle forever. Nothing ever GCs tombstones (annotation tombstones keep full quote text; stroke tombstones keep full point strings) or old sessions — the database and bundle grow monotonically.
+
+Evidence:
+
+- `vellum/app/src/main/java/app/vellum/reader/library/LibraryViewModel.kt:120-124`
+- `vellum/app/src/main/java/app/vellum/reader/sync/SyncEngine.kt:47,198`
+
+### 55. Failure paths are silent — zero logging app-wide
+
+No `Log.e/w/d/i` call exists anywhere in the app. Import, sync, TTS, and voice-pack failure paths swallow exceptions (or reduce them to `e.message`, which is often null for IO/JSON exceptions, yielding a bare "Sync failed"). Debugging any of the issues above over adb is currently blind.
+
+Evidence:
+
+- grep for `Log.` across `vellum/app/src/main/java`: 0 hits
+- swallowed exceptions: `BookImporter.kt:34-37,65-67,74-76,113-115,143-145,240-242,253-256,267-271`; `SyncEngine.kt:49-51`; `KokoroVoicePack.kt:72-75`; `EpubLibraryOpener.kt:66-69`
+
+## Low (compact)
+
+- **Pull counter miscounts:** `pulled++` increments even when `openInputStream` returns null — `vellum/app/src/main/java/app/vellum/reader/sync/SyncEngine.kt:125-128`.
+- **Landscape comic prefetch is wasted:** prefetch warms full-width bitmaps but `SpreadView` requests `halfWidth` — cache keys never match — `ComicReaderScreen.kt:99,353,358`.
+- **Voice-pack integrity:** `isInstalled` checks file existence only, so a kill mid-extract leaves a truncated `model.onnx` that passes; extract progress is a sawtooth (`0.9f + 0.1f * (count % 200)/200`); `connection.disconnect()` never called — `KokoroVoicePack.kt:35-41,51,98`.
+- **Stale KDoc contradicts settled JNI workaround:** `KokoroEngine.kt:14-16` still claims `generateWithCallback` streaming — risks the crash workaround being "restored" — vs `:49-54`.
+- **Covers stored as lossless PNG:** the quality-90 parameter is a no-op for PNG; WebP/JPEG would cut disk and decode time — `BookImporter.kt:266`.
+- **`renameTo`/short-read results unchecked** in importer — `BookImporter.kt:39,48`.
+- **Dead code:** `PageCanvas.kt` past its flagged Phase-4 removal deadline (`reader/ui/PageCanvas.kt:14-18`); `pageAspectRatio` unused (`PdfPageRenderer.kt:32-36`) — ironically what a sized page placeholder needs; `PageCurlShader.kt:22,132-135` `direction`/`flipX` uniforms are dead weight with a misleading comment.
+- **Search cosmetics:** double ellipsis (SQL snippet plus UI wrapper) — `SearchDao.kt:31` + `SearchScreen.kt:119`; results in rowid order with no rank; in-book results repeat the book's own title — `SearchScreen.kt:124`.
+- **LWW ties never converge:** strict `>` with local-first ordering means equal timestamps leave devices permanently disagreeing; no future-clock sanity check — `SyncEngine.kt:71-75`.
+- **`octet-stream` missing from intent filters**, so many downloaded EPUBs never offer Vellum in the chooser despite the importer's magic-byte sniffing handling them — `AndroidManifest.xml:22-48`; deprecated `getParcelableExtra` despite minSdk 33 — `MainActivity.kt:40-41`; default `launchMode` stacks a second activity instance on VIEW-while-running (pairs with issue 32) — `MainActivity.kt:24-33`.
+- **`deleteBooks` resolves selections against the filtered list** — a concurrently filtered-out book silently survives a confirmed remove; stale selections of synced-away books are never pruned — `LibraryViewModel.kt:164-167`.
+- **Session DAO duplication:** both `insert` and `upsert` for the same entity with fully-qualified annotations — `SessionDao.kt:11-18`.
 
