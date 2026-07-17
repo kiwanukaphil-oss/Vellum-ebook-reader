@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -13,6 +12,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.vellum.reader.comic.ComicReaderScreen
+import app.vellum.reader.core.theme.VellumTheme
 import app.vellum.reader.insights.InsightsScreen
 import app.vellum.reader.library.BookImporter
 import app.vellum.reader.library.LibraryScreen
@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         // process recreation, which would re-run the import on every rebuild.
         if (savedInstanceState == null) handleImportIntent(intent)
         setContent {
-            MaterialTheme {
+            VellumTheme {
                 VellumNavHost()
             }
         }
