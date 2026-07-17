@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.map
 
 private val Context.readerPrefs by preferencesDataStore(name = "reader_settings")
 
-enum class TurnStyle { CURL, SLIDE }
+enum class TurnStyle { CURL, SLIDE, FADE }
 
 data class ReaderSettings(
     val theme: ReadingTheme = ReadingTheme.PaperWhite,
@@ -26,6 +26,8 @@ data class ReaderSettings(
     val pageRustle: Boolean = false,
     /** 0 = focus timer off. */
     val focusMinutes: Int = 0,
+    /** In-reader screen brightness 0..1; negative = follow the system. */
+    val readerBrightness: Float = -1f,
     val syncFolderUri: String? = null,
     val lastSyncAt: Long = 0,
     /** System-TTS voice name; null = engine default. */
@@ -52,6 +54,7 @@ class ReaderSettingsStore(private val context: Context) {
     private val pageEdgesKey = booleanPreferencesKey("page_edges")
     private val pageRustleKey = booleanPreferencesKey("page_rustle")
     private val focusMinutesKey = androidx.datastore.preferences.core.intPreferencesKey("focus_minutes")
+    private val brightnessKey = floatPreferencesKey("reader_brightness")
     private val syncFolderKey = stringPreferencesKey("sync_folder_uri")
     private val lastSyncKey = androidx.datastore.preferences.core.longPreferencesKey("last_sync_at")
     private val ttsVoiceKey = stringPreferencesKey("tts_voice")
@@ -70,12 +73,17 @@ class ReaderSettingsStore(private val context: Context) {
                 paragraphSpacingDp = prefs[paragraphSpacingKey] ?: defaults.paragraphSpacingDp,
             ),
             eveningMode = prefs[eveningKey] ?: false,
-            turnStyle = if (prefs[turnStyleKey] == "slide") TurnStyle.SLIDE else TurnStyle.CURL,
+            turnStyle = when (prefs[turnStyleKey]) {
+                "slide" -> TurnStyle.SLIDE
+                "fade" -> TurnStyle.FADE
+                else -> TurnStyle.CURL
+            },
             hapticsEnabled = prefs[hapticsKey] ?: true,
             paperTexture = prefs[paperTextureKey] ?: true,
             pageEdges = prefs[pageEdgesKey] ?: true,
             pageRustle = prefs[pageRustleKey] ?: false,
             focusMinutes = prefs[focusMinutesKey] ?: 0,
+            readerBrightness = prefs[brightnessKey] ?: -1f,
             syncFolderUri = prefs[syncFolderKey],
             lastSyncAt = prefs[lastSyncKey] ?: 0,
             ttsVoice = prefs[ttsVoiceKey],
@@ -98,8 +106,15 @@ class ReaderSettingsStore(private val context: Context) {
 
     suspend fun setEveningMode(enabled: Boolean) = context.readerPrefs.edit { it[eveningKey] = enabled }
 
-    suspend fun setTurnStyle(style: TurnStyle) =
-        context.readerPrefs.edit { it[turnStyleKey] = if (style == TurnStyle.SLIDE) "slide" else "curl" }
+    suspend fun setTurnStyle(style: TurnStyle) = context.readerPrefs.edit {
+        it[turnStyleKey] = when (style) {
+            TurnStyle.SLIDE -> "slide"
+            TurnStyle.FADE -> "fade"
+            TurnStyle.CURL -> "curl"
+        }
+    }
+
+    suspend fun setReaderBrightness(value: Float) = context.readerPrefs.edit { it[brightnessKey] = value }
 
     suspend fun setHaptics(enabled: Boolean) = context.readerPrefs.edit { it[hapticsKey] = enabled }
 

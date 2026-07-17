@@ -178,6 +178,25 @@ fun ReaderScreen(
     }
     val theme = settings.theme.warmed(warmth)
 
+    // In-reader brightness override; the system level returns on exit.
+    androidx.compose.runtime.DisposableEffect(settings.readerBrightness) {
+        val window = (context as? android.app.Activity)?.window
+        window?.let {
+            it.attributes = it.attributes.apply {
+                screenBrightness =
+                    if (settings.readerBrightness < 0f) android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    else settings.readerBrightness
+            }
+        }
+        onDispose {
+            window?.let {
+                it.attributes = it.attributes.apply {
+                    screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                }
+            }
+        }
+    }
+
     // Focus timer: quiet countdown from entering the reader; one soft tone at zero.
     var focusRemainingSec by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(settings.focusMinutes) {
@@ -332,7 +351,7 @@ fun ReaderScreen(
             }
 
             fun tapTurn(forward: Boolean) {
-                if (settings.turnStyle == TurnStyle.SLIDE) {
+                if (settings.turnStyle != TurnStyle.CURL) {
                     if (forward) viewModel.nextPage() else viewModel.prevPage()
                     clickHaptic()
                     return
@@ -344,13 +363,17 @@ fun ReaderScreen(
             }
 
             // ---- Page content -------------------------------------------------
-            if (settings.turnStyle == TurnStyle.SLIDE) {
+            if (settings.turnStyle != TurnStyle.CURL) {
                 AnimatedContent(
                     targetState = ui.pageKey,
                     transitionSpec = {
-                        val direction = if (ui.forward) 1 else -1
-                        (slideInHorizontally(tween(220)) { it * direction } + fadeIn(tween(220)))
-                            .togetherWith(slideOutHorizontally(tween(220)) { -it * direction } + fadeOut(tween(220)))
+                        if (settings.turnStyle == TurnStyle.FADE) {
+                            fadeIn(tween(240)) togetherWith fadeOut(tween(240))
+                        } else {
+                            val direction = if (ui.forward) 1 else -1
+                            (slideInHorizontally(tween(220)) { it * direction } + fadeIn(tween(220)))
+                                .togetherWith(slideOutHorizontally(tween(220)) { -it * direction } + fadeOut(tween(220)))
+                        }
                     },
                     label = "pageTurn",
                 ) { key ->
@@ -408,7 +431,7 @@ fun ReaderScreen(
                         }
                     }
                     .pointerInput(settings.turnStyle) {
-                        if (settings.turnStyle == TurnStyle.SLIDE) {
+                        if (settings.turnStyle != TurnStyle.CURL) {
                             var dragTotal = 0f
                             detectHorizontalDragGestures(
                                 onDragStart = { dragTotal = 0f },
