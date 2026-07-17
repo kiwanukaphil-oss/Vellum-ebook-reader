@@ -93,7 +93,7 @@ class InsightsViewModel(app: VellumApp) : ViewModel() {
 /** Reading insights — presented as quiet numbers, never as a game. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InsightsScreen(onBack: () -> Unit) {
+fun InsightsScreen(onBack: (() -> Unit)? = null) {
     val app = LocalContext.current.applicationContext as VellumApp
     val viewModel: InsightsViewModel = viewModel { InsightsViewModel(app) }
     val state by viewModel.state.collectAsState()
@@ -103,8 +103,10 @@ fun InsightsScreen(onBack: () -> Unit) {
             TopAppBar(
                 title = { Text("Reading", fontFamily = FontFamily.Serif) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
                     }
                 },
             )

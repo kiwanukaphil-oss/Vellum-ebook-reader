@@ -36,6 +36,9 @@ interface BookDao {
     @Query("SELECT * FROM reading_positions WHERE bookUuid = :bookUuid")
     suspend fun positionFor(bookUuid: String): ReadingPositionEntity?
 
+    @Query("SELECT * FROM reading_positions")
+    fun observePositions(): Flow<List<ReadingPositionEntity>>
+
     @Query("DELETE FROM reading_positions WHERE bookUuid = :bookUuid")
     suspend fun deletePosition(bookUuid: String)
 

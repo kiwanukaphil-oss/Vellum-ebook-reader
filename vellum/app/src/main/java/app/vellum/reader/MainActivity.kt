@@ -6,17 +6,37 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.FormatQuote
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.vellum.reader.comic.ComicReaderScreen
+import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.theme.VellumTheme
+import app.vellum.reader.home.ReadingScreen
 import app.vellum.reader.insights.InsightsScreen
 import app.vellum.reader.library.BookImporter
 import app.vellum.reader.library.LibraryScreen
+import app.vellum.reader.notes.NotesScreen
 import app.vellum.reader.pdf.PdfReaderScreen
 import app.vellum.reader.reader.ui.ReaderScreen
 import app.vellum.reader.search.SearchScreen
@@ -52,79 +72,124 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private data class VellumTab(val route: String, val label: String, val icon: ImageVector)
+
+private val Tabs = listOf(
+    VellumTab("library", "Library", Icons.AutoMirrored.Outlined.MenuBook),
+    VellumTab("reading", "Reading", Icons.Outlined.AutoStories),
+    VellumTab("notes", "Notes", Icons.Outlined.FormatQuote),
+    VellumTab("insights", "Insights", Icons.Outlined.Insights),
+)
+
+private fun readerRouteFor(format: String, uuid: String): String = when (format) {
+    "pdf" -> "pdf/$uuid"
+    "cbz", "cbr", "comic-epub" -> "comic/$uuid"
+    else -> "reader/$uuid"
+}
+
 @Composable
 private fun VellumNavHost() {
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = "library") {
-        composable("library") {
-            LibraryScreen(
-                onOpenBook = { book ->
-                    navController.navigate(
-                        when (book.format) {
-                            "pdf" -> "pdf/${book.uuid}"
-                            "cbz", "cbr", "comic-epub" -> "comic/${book.uuid}"
-                            else -> "reader/${book.uuid}"
-                        },
-                    )
-                },
-                onOpenSearch = { navController.navigate("search") },
-                onOpenInsights = { navController.navigate("insights") },
-            )
-        }
-        composable("insights") {
-            InsightsScreen(onBack = { navController.popBackStack() })
-        }
-        composable(
-            route = "comic/{bookUuid}",
-            arguments = listOf(navArgument("bookUuid") { type = NavType.StringType }),
-        ) { entry ->
-            val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
-            ComicReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
-        }
-        composable(
-            route = "pdf/{bookUuid}",
-            arguments = listOf(navArgument("bookUuid") { type = NavType.StringType }),
-        ) { entry ->
-            val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
-            PdfReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
-        }
-        composable(
-            route = "search?bookUuid={bookUuid}",
-            arguments = listOf(navArgument("bookUuid") { type = NavType.StringType; nullable = true; defaultValue = null }),
-        ) { entry ->
-            SearchScreen(
-                scopeBookUuid = entry.arguments?.getString("bookUuid"),
-                onOpenBook = { uuid, format ->
-                    navController.navigate(
-                        when (format) {
-                            "pdf" -> "pdf/$uuid"
-                            "cbz", "cbr", "comic-epub" -> "comic/$uuid"
-                            else -> "reader/$uuid"
-                        },
-                    )
-                },
-                onOpenPassage = { uuid, chapter, offset ->
-                    navController.navigate("reader/$uuid?chapter=$chapter&offset=$offset")
-                },
-                onBack = { navController.popBackStack() },
-            )
-        }
-        composable(
-            route = "reader/{bookUuid}?chapter={chapter}&offset={offset}",
-            arguments = listOf(
-                navArgument("bookUuid") { type = NavType.StringType },
-                navArgument("chapter") { type = NavType.IntType; defaultValue = -1 },
-                navArgument("offset") { type = NavType.IntType; defaultValue = -1 },
-            ),
-        ) { entry ->
-            val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
-            ReaderScreen(
-                bookUuid = bookUuid,
-                initialChapter = entry.arguments?.getInt("chapter") ?: -1,
-                initialOffset = entry.arguments?.getInt("offset") ?: -1,
-                onBack = { navController.popBackStack() },
-                onSearchInBook = { uuid -> navController.navigate("search?bookUuid=$uuid") },
-            )
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val openBook: (BookEntity) -> Unit = { book ->
+        navController.navigate(readerRouteFor(book.format, book.uuid))
+    }
+
+    // The nav bar only exists on the four top-level tabs; readers and search
+    // keep the full screen. contentWindowInsets is zeroed so those full-bleed
+    // destinations receive no phantom bottom padding.
+    Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        bottomBar = {
+            if (Tabs.any { it.route == currentRoute }) {
+                NavigationBar {
+                    Tabs.forEach { tab ->
+                        NavigationBarItem(
+                            selected = currentRoute == tab.route,
+                            onClick = {
+                                navController.navigate(tab.route) {
+                                    popUpTo("library") { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = { Icon(tab.icon, contentDescription = null) },
+                            label = { Text(tab.label) },
+                        )
+                    }
+                }
+            }
+        },
+    ) { padding ->
+        NavHost(
+            navController = navController,
+            startDestination = "library",
+            modifier = Modifier.padding(padding).consumeWindowInsets(padding),
+        ) {
+            composable("library") {
+                LibraryScreen(
+                    onOpenBook = openBook,
+                    onOpenSearch = { navController.navigate("search") },
+                )
+            }
+            composable("reading") {
+                ReadingScreen(onOpenBook = openBook)
+            }
+            composable("notes") {
+                NotesScreen(
+                    onOpenPassage = { uuid, chapter, offset ->
+                        navController.navigate("reader/$uuid?chapter=$chapter&offset=$offset")
+                    },
+                )
+            }
+            composable("insights") {
+                InsightsScreen()
+            }
+            composable(
+                route = "comic/{bookUuid}",
+                arguments = listOf(navArgument("bookUuid") { type = NavType.StringType }),
+            ) { entry ->
+                val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
+                ComicReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
+            }
+            composable(
+                route = "pdf/{bookUuid}",
+                arguments = listOf(navArgument("bookUuid") { type = NavType.StringType }),
+            ) { entry ->
+                val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
+                PdfReaderScreen(bookUuid = bookUuid, onBack = { navController.popBackStack() })
+            }
+            composable(
+                route = "search?bookUuid={bookUuid}",
+                arguments = listOf(navArgument("bookUuid") { type = NavType.StringType; nullable = true; defaultValue = null }),
+            ) { entry ->
+                SearchScreen(
+                    scopeBookUuid = entry.arguments?.getString("bookUuid"),
+                    onOpenBook = { uuid, format -> navController.navigate(readerRouteFor(format, uuid)) },
+                    onOpenPassage = { uuid, chapter, offset ->
+                        navController.navigate("reader/$uuid?chapter=$chapter&offset=$offset")
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(
+                route = "reader/{bookUuid}?chapter={chapter}&offset={offset}",
+                arguments = listOf(
+                    navArgument("bookUuid") { type = NavType.StringType },
+                    navArgument("chapter") { type = NavType.IntType; defaultValue = -1 },
+                    navArgument("offset") { type = NavType.IntType; defaultValue = -1 },
+                ),
+            ) { entry ->
+                val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
+                ReaderScreen(
+                    bookUuid = bookUuid,
+                    initialChapter = entry.arguments?.getInt("chapter") ?: -1,
+                    initialOffset = entry.arguments?.getInt("offset") ?: -1,
+                    onBack = { navController.popBackStack() },
+                    onSearchInBook = { uuid -> navController.navigate("search?bookUuid=$uuid") },
+                )
+            }
         }
     }
 }

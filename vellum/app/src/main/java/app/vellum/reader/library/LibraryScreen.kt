@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -82,7 +81,6 @@ import kotlin.math.absoluteValue
 fun LibraryScreen(
     onOpenBook: (BookEntity) -> Unit,
     onOpenSearch: () -> Unit,
-    onOpenInsights: () -> Unit,
 ) {
     val app = LocalContext.current.applicationContext as VellumApp
     val viewModel: LibraryViewModel = viewModel { LibraryViewModel(app) }
@@ -156,9 +154,6 @@ fun LibraryScreen(
                     actions = {
                         IconButton(onClick = { syncSheetOpen = true }) {
                             Icon(Icons.Filled.Refresh, contentDescription = "Sync")
-                        }
-                        IconButton(onClick = onOpenInsights) {
-                            Icon(Icons.Filled.Info, contentDescription = "Reading insights")
                         }
                         IconButton(onClick = onOpenSearch) {
                             Icon(Icons.Filled.Search, contentDescription = "Search library")

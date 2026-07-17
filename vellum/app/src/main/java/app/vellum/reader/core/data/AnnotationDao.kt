@@ -12,6 +12,10 @@ interface AnnotationDao {
     @Query("SELECT * FROM annotations WHERE bookUuid = :bookUuid AND deletedAt IS NULL ORDER BY chapterIndex, startChar")
     fun observeForBook(bookUuid: String): Flow<List<AnnotationEntity>>
 
+    /** Every live annotation across the library — feeds the Notes tab. */
+    @Query("SELECT * FROM annotations WHERE deletedAt IS NULL ORDER BY chapterIndex, startChar")
+    fun observeAllLive(): Flow<List<AnnotationEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(annotation: AnnotationEntity)
 
