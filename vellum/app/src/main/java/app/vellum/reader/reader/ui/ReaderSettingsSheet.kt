@@ -1,7 +1,7 @@
 package app.vellum.reader.reader.ui
 
-import android.app.Activity
 import android.view.WindowManager
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
@@ -50,6 +49,7 @@ import app.vellum.reader.core.fonts.VellumFonts
 import app.vellum.reader.core.model.ReadingTheme
 import app.vellum.reader.core.settings.ReaderSettings
 import app.vellum.reader.core.settings.ReaderSettingsStore
+import app.vellum.reader.core.settings.NarrationProvider
 import app.vellum.reader.core.settings.TurnStyle
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -299,7 +299,12 @@ fun ReaderSettingsSheet(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Voice & listening", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "Reading engine and voice",
+                        when (settings.narrationProvider) {
+                            NarrationProvider.SYSTEM -> "System speech · Phone voices"
+                            NarrationProvider.KOKORO -> "Kokoro neural · Offline"
+                            NarrationProvider.ELEVENLABS ->
+                                "ElevenLabs · ${settings.elevenLabsVoiceName ?: "Choose a narrator"}"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -408,7 +413,7 @@ private fun StepperRow(
 @Composable
 private fun BrightnessRow(settings: ReaderSettings, store: ReaderSettingsStore) {
     val scope = rememberCoroutineScope()
-    val window = (LocalContext.current as? Activity)?.window
+    val window = LocalActivity.current?.window
     var pending by remember(settings.readerBrightness) {
         mutableFloatStateOf(settings.readerBrightness)
     }

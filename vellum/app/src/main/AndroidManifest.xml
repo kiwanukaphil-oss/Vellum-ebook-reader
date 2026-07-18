@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Used ONLY for user-initiated dictionary/Wikipedia lookups of a selected
-         term. No analytics, no content tracking (see build plan privacy rule). -->
+    <!-- User-initiated dictionary/Wikipedia lookups, voice-pack downloads, and
+         opt-in ElevenLabs cloud narration. No analytics or content tracking. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application

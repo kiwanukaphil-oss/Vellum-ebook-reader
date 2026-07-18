@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -40,11 +41,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -103,6 +111,8 @@ import kotlinx.coroutines.withContext
 import java.time.LocalTime
 import kotlin.math.abs
 
+private val TTS_SPEED_OPTIONS = listOf(0.8f, 1.0f, 1.2f, 1.5f, 2.0f)
+
 /** Everything one in-flight curl turn needs, captured before the first frame. */
 private class TurnSession(
     val forward: Boolean,
@@ -138,6 +148,7 @@ fun ReaderScreen(
     val ttsStatus by viewModel.ttsStatus.collectAsState()
     val ttsRange by viewModel.ttsRange.collectAsState()
     val ttsSleep by viewModel.ttsSleep.collectAsState()
+    val ttsSpeed by viewModel.ttsSpeed.collectAsState()
     val textMeasurer = rememberTextMeasurer(cacheSize = 0)
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
@@ -146,7 +157,7 @@ fun ReaderScreen(
     val clipboard = LocalClipboardManager.current
     var settingsSheetOpen by remember { mutableStateOf(false) }
     var annotationsListOpen by remember { mutableStateOf(false) }
-    var speedLabel by remember { mutableStateOf("1.0×") }
+    var speedMenuOpen by remember { mutableStateOf(false) }
     var spreadMode by remember { mutableStateOf(false) }
     var voicePickerOpen by remember { mutableStateOf(false) }
     var editorForSelection by remember { mutableStateOf(false) }
@@ -609,40 +620,83 @@ fun ReaderScreen(
                     .padding(bottom = 12.dp),
             ) {
                 androidx.compose.material3.Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
                     tonalElevation = 6.dp,
                     shadowElevation = 6.dp,
                 ) {
                     androidx.compose.foundation.layout.Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
                     ) {
-                        androidx.compose.material3.TextButton(
+                        IconButton(
                             enabled = ttsStatus != TtsStatus.PREPARING,
                             onClick = {
                                 if (ttsStatus == TtsStatus.PLAYING) viewModel.pauseTts() else viewModel.startTts()
                             },
                         ) {
-                            Text(
-                                when (ttsStatus) {
-                                    TtsStatus.PREPARING -> "Preparing…"
-                                    TtsStatus.PLAYING -> "Pause"
-                                    else -> "Resume"
-                                },
-                            )
+                            when (ttsStatus) {
+                                TtsStatus.PREPARING -> CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .semantics { contentDescription = "Preparing speech" },
+                                    strokeWidth = 2.dp,
+                                )
+                                TtsStatus.PLAYING -> Icon(Icons.Filled.Pause, contentDescription = "Pause")
+                                else -> Icon(Icons.Filled.PlayArrow, contentDescription = "Resume")
+                            }
                         }
-                        androidx.compose.material3.TextButton(onClick = {
-                            val rate = viewModel.cycleTtsSpeed()
-                            speedLabel = "${rate}×"
-                        }) { Text(speedLabel) }
-                        androidx.compose.material3.TextButton(onClick = {
+                        IconButton(onClick = { viewModel.stopTts() }) {
+                            Icon(Icons.Filled.Stop, contentDescription = "Stop reading aloud")
+                        }
+                        Box {
+                            TextButton(
+                                onClick = { speedMenuOpen = true },
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Playback speed ${ttsSpeed} times"
+                                },
+                            ) {
+                                Text("${ttsSpeed}×")
+                            }
+                            DropdownMenu(
+                                expanded = speedMenuOpen,
+                                onDismissRequest = { speedMenuOpen = false },
+                            ) {
+                                TTS_SPEED_OPTIONS.forEach { speed ->
+                                    DropdownMenuItem(
+                                        text = { Text("${speed}×") },
+                                        leadingIcon = if (speed == ttsSpeed) {
+                                            { Icon(Icons.Filled.Check, contentDescription = null) }
+                                        } else null,
+                                        onClick = {
+                                            viewModel.setTtsSpeed(speed)
+                                            speedMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        IconButton(onClick = {
                             viewModel.prepareVoices()
                             voicePickerOpen = true
-                        }) { Text("Voice") }
-                        androidx.compose.material3.TextButton(onClick = { viewModel.cycleSleepTimer() }) {
-                            Text(ttsSleep.label)
+                        }) {
+                            Icon(Icons.Filled.RecordVoiceOver, contentDescription = "Choose voice")
                         }
-                        androidx.compose.material3.TextButton(onClick = { viewModel.stopTts() }) { Text("Stop") }
+                        TextButton(
+                            onClick = { viewModel.cycleSleepTimer() },
+                            modifier = Modifier.semantics {
+                                contentDescription = ttsSleep.label
+                            },
+                        ) {
+                            Icon(Icons.Filled.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(ttsSleep.compactLabel)
+                        }
                     }
                 }
             }
@@ -698,17 +752,30 @@ fun ReaderScreen(
             val voices by viewModel.ttsVoices.collectAsState()
             val kokoroInstalled by viewModel.kokoroInstalled.collectAsState()
             val kokoroProgress by viewModel.kokoroDownloadProgress.collectAsState()
+            val elevenLabs by viewModel.elevenLabsState.collectAsState()
+            val elevenLabsCache by viewModel.elevenLabsCacheStatus.collectAsState()
             VoicePickerSheet(
-                engine = settings.ttsEngine,
+                provider = settings.narrationProvider,
                 systemVoices = voices,
                 currentSystemVoice = settings.ttsVoice,
                 kokoroInstalled = kokoroInstalled,
                 kokoroDownloadProgress = kokoroProgress,
                 currentKokoroVoice = settings.kokoroVoice,
-                onEngine = { viewModel.setTtsEngine(it) },
+                elevenLabs = elevenLabs,
+                elevenLabsCache = elevenLabsCache,
+                currentElevenLabsVoiceId = settings.elevenLabsVoiceId,
+                currentElevenLabsVoiceName = settings.elevenLabsVoiceName,
+                elevenLabsModel = settings.elevenLabsModel,
+                onProvider = { viewModel.setNarrationProvider(it) },
                 onDownloadKokoro = { viewModel.downloadKokoro() },
                 onPickSystemVoice = { viewModel.setTtsVoice(it.name) },
                 onPickKokoroVoice = { viewModel.setKokoroVoice(it) },
+                onConnectElevenLabs = { viewModel.connectElevenLabs(it) },
+                onDisconnectElevenLabs = { viewModel.disconnectElevenLabs() },
+                onRefreshElevenLabs = { viewModel.refreshElevenLabs() },
+                onPickElevenLabsVoice = { viewModel.setElevenLabsVoice(it) },
+                onElevenLabsModel = { viewModel.setElevenLabsModel(it) },
+                onClearElevenLabsCache = { viewModel.clearElevenLabsCache() },
                 onDismiss = { voicePickerOpen = false },
             )
         }

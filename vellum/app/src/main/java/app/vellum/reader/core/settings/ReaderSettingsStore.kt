@@ -15,6 +15,27 @@ private val Context.readerPrefs by preferencesDataStore(name = "reader_settings"
 
 enum class TurnStyle { CURL, SLIDE, FADE }
 
+/** The source responsible for turning book text into narration. */
+enum class NarrationProvider(val id: String) {
+    SYSTEM("system"),
+    KOKORO("kokoro"),
+    ELEVENLABS("elevenlabs");
+
+    companion object {
+        fun fromId(id: String?): NarrationProvider = entries.firstOrNull { it.id == id } ?: SYSTEM
+    }
+}
+
+/** ElevenLabs generation models exposed as reader-friendly quality choices. */
+enum class ElevenLabsModel(val id: String) {
+    PREMIUM("eleven_multilingual_v2"),
+    EFFICIENT("eleven_flash_v2_5");
+
+    companion object {
+        fun fromId(id: String?): ElevenLabsModel = entries.firstOrNull { it.id == id } ?: PREMIUM
+    }
+}
+
 data class ReaderSettings(
     val theme: ReadingTheme = ReadingTheme.PaperWhite,
     val typography: TypographySettings = TypographySettings(),
@@ -32,10 +53,12 @@ data class ReaderSettings(
     val lastSyncAt: Long = 0,
     /** System-TTS voice name; null = engine default. */
     val ttsVoice: String? = null,
-    /** "system" or "kokoro". */
-    val ttsEngine: String = "system",
+    val narrationProvider: NarrationProvider = NarrationProvider.SYSTEM,
     /** Kokoro speaker id (0..10). */
     val kokoroVoice: Int = 0,
+    val elevenLabsVoiceId: String? = null,
+    val elevenLabsVoiceName: String? = null,
+    val elevenLabsModel: ElevenLabsModel = ElevenLabsModel.PREMIUM,
 )
 
 /** DataStore-backed reader preferences shared by every book. */
@@ -58,8 +81,12 @@ class ReaderSettingsStore(private val context: Context) {
     private val syncFolderKey = stringPreferencesKey("sync_folder_uri")
     private val lastSyncKey = androidx.datastore.preferences.core.longPreferencesKey("last_sync_at")
     private val ttsVoiceKey = stringPreferencesKey("tts_voice")
-    private val ttsEngineKey = stringPreferencesKey("tts_engine")
+    private val legacyTtsEngineKey = stringPreferencesKey("tts_engine")
+    private val narrationProviderKey = stringPreferencesKey("narration_provider")
     private val kokoroVoiceKey = androidx.datastore.preferences.core.intPreferencesKey("kokoro_voice")
+    private val elevenLabsVoiceIdKey = stringPreferencesKey("elevenlabs_voice_id")
+    private val elevenLabsVoiceNameKey = stringPreferencesKey("elevenlabs_voice_name")
+    private val elevenLabsModelKey = stringPreferencesKey("elevenlabs_model")
 
     val settings: Flow<ReaderSettings> = context.readerPrefs.data.map { prefs ->
         val defaults = TypographySettings()
@@ -87,8 +114,13 @@ class ReaderSettingsStore(private val context: Context) {
             syncFolderUri = prefs[syncFolderKey],
             lastSyncAt = prefs[lastSyncKey] ?: 0,
             ttsVoice = prefs[ttsVoiceKey],
-            ttsEngine = prefs[ttsEngineKey] ?: "system",
+            narrationProvider = NarrationProvider.fromId(
+                prefs[narrationProviderKey] ?: prefs[legacyTtsEngineKey],
+            ),
             kokoroVoice = prefs[kokoroVoiceKey] ?: 0,
+            elevenLabsVoiceId = prefs[elevenLabsVoiceIdKey],
+            elevenLabsVoiceName = prefs[elevenLabsVoiceNameKey],
+            elevenLabsModel = ElevenLabsModel.fromId(prefs[elevenLabsModelKey]),
         )
     }
 
@@ -132,7 +164,18 @@ class ReaderSettingsStore(private val context: Context) {
 
     suspend fun setTtsVoice(name: String) = context.readerPrefs.edit { it[ttsVoiceKey] = name }
 
-    suspend fun setTtsEngine(engine: String) = context.readerPrefs.edit { it[ttsEngineKey] = engine }
+    suspend fun setNarrationProvider(provider: NarrationProvider) = context.readerPrefs.edit {
+        it[narrationProviderKey] = provider.id
+    }
 
     suspend fun setKokoroVoice(sid: Int) = context.readerPrefs.edit { it[kokoroVoiceKey] = sid }
+
+    suspend fun setElevenLabsVoice(id: String, name: String) = context.readerPrefs.edit {
+        it[elevenLabsVoiceIdKey] = id
+        it[elevenLabsVoiceNameKey] = name
+    }
+
+    suspend fun setElevenLabsModel(model: ElevenLabsModel) = context.readerPrefs.edit {
+        it[elevenLabsModelKey] = model.id
+    }
 }

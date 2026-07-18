@@ -19,11 +19,23 @@ import app.vellum.reader.reader.layout.PaginatedChapter
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import app.vellum.reader.core.data.AnnotationEntity
+import app.vellum.reader.core.settings.ElevenLabsModel
+import app.vellum.reader.core.settings.NarrationProvider
+import app.vellum.reader.reader.tts.CachedElevenLabsNarration
+import app.vellum.reader.reader.tts.ElevenLabsApiException
+import app.vellum.reader.reader.tts.ElevenLabsAudioCache
+import app.vellum.reader.reader.tts.ElevenLabsClient
+import app.vellum.reader.reader.tts.ElevenLabsCredentialStore
+import app.vellum.reader.reader.tts.ElevenLabsGenerationRequest
+import app.vellum.reader.reader.tts.ElevenLabsPlayback
+import app.vellum.reader.reader.tts.ElevenLabsSubscription
+import app.vellum.reader.reader.tts.ElevenLabsVoice
 import app.vellum.reader.reader.tts.KokoroEngine
 import app.vellum.reader.reader.tts.KokoroVoicePack
 import kotlinx.coroutines.isActive
 import app.vellum.reader.core.data.ReadingSessionEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -33,7 +45,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.Channel
 import java.io.File
+import java.io.IOException
 import java.util.UUID
 
 /** Identity of one rendered page; layoutVersion changes force page re-resolution. */
@@ -51,12 +65,12 @@ data class SelectionRange(val startChar: Int, val endChar: Int)
 enum class TtsStatus { OFF, PREPARING, PLAYING, PAUSED }
 
 /** Sleep timer choices, cycled from the TTS bar. */
-enum class TtsSleep(val label: String, val minutes: Int?) {
-    OFF("Sleep: off", null),
-    MIN15("Sleep: 15m", 15),
-    MIN30("Sleep: 30m", 30),
-    MIN60("Sleep: 60m", 60),
-    END_OF_CHAPTER("Sleep: chapter", null),
+enum class TtsSleep(val label: String, val compactLabel: String, val minutes: Int?) {
+    OFF("Sleep: off", "Off", null),
+    MIN15("Sleep: 15 minutes", "15m", 15),
+    MIN30("Sleep: 30 minutes", "30m", 30),
+    MIN60("Sleep: 60 minutes", "60m", 60),
+    END_OF_CHAPTER("Sleep: end of chapter", "Ch.", null),
 }
 
 data class ReaderUiState(
@@ -73,6 +87,29 @@ data class ReaderUiState(
 ) {
     val pageKey: PageKey get() = PageKey(layoutVersion, chapterIndex, pageIndex)
 }
+
+data class ElevenLabsUiState(
+    val connected: Boolean = false,
+    val loading: Boolean = false,
+    val voices: List<ElevenLabsVoice> = emptyList(),
+    val subscription: ElevenLabsSubscription? = null,
+    val error: String? = null,
+)
+
+data class ElevenLabsCacheStatus(
+    val cachedPassages: Int = 0,
+    val totalPassages: Int = 0,
+    val storedBytes: Long = 0,
+) {
+    val chapterFullyCached: Boolean get() = totalPassages > 0 && cachedPassages == totalPassages
+}
+
+private data class ElevenLabsSegment(
+    val base: Int,
+    val text: String,
+    val narration: CachedElevenLabsNarration,
+    val relativeStartChar: Int,
+)
 
 /**
  * Drives one reading session: opens the EPUB, paginates chapters on demand,
@@ -108,6 +145,7 @@ class ReaderViewModel(
     val ttsStatus = MutableStateFlow(TtsStatus.OFF)
     val ttsRange = MutableStateFlow<SelectionRange?>(null)
     val ttsSleep = MutableStateFlow(TtsSleep.OFF)
+    val ttsSpeed = MutableStateFlow(1.0f)
 
     /** Offline voices of the active engine, best quality first. */
     val ttsVoices = MutableStateFlow<List<android.speech.tts.Voice>>(emptyList())
@@ -115,14 +153,22 @@ class ReaderViewModel(
     // Kokoro neural engine state
     val kokoroInstalled = MutableStateFlow(app.let { KokoroVoicePack.isInstalled(it) })
     val kokoroDownloadProgress = MutableStateFlow<Float?>(null)
+    val elevenLabsState = MutableStateFlow(
+        ElevenLabsUiState(connected = ElevenLabsCredentialStore(app).hasKey()),
+    )
+    val elevenLabsCacheStatus = MutableStateFlow(ElevenLabsCacheStatus())
     private var kokoro: KokoroEngine? = null
     private var kokoroJob: kotlinx.coroutines.Job? = null
+    private val elevenLabsCredentials = ElevenLabsCredentialStore(app)
+    private val elevenLabsClient = ElevenLabsClient()
+    private val elevenLabsCache = ElevenLabsAudioCache(app)
+    private val elevenLabsPlayback = ElevenLabsPlayback()
+    private var elevenLabsJob: kotlinx.coroutines.Job? = null
     private var kokoroSid = 0
     private var tts: TextToSpeech? = null
     private var ttsChunks: List<Pair<Int, String>> = emptyList()
     private var ttsChunkIndex = 0
     private var ttsResumeOffset: Int? = null
-    private var ttsSpeed = 1.0f
     private var sleepJob: kotlinx.coroutines.Job? = null
 
     /** Flattened nav-doc contents; drives the TOC sheet and chapter labels. */
@@ -618,10 +664,31 @@ class ReaderViewModel(
         viewModelScope.launch {
             val settings = app.settingsStore.settings.first()
             kokoroSid = settings.kokoroVoice
-            if (settings.ttsEngine == "kokoro" && KokoroVoicePack.isInstalled(app)) {
-                startKokoro(startOffset)
-            } else {
-                ensureTtsEngine { beginSpeaking(startOffset) }
+            when (settings.narrationProvider) {
+                NarrationProvider.SYSTEM -> ensureTtsEngine { beginSpeaking(startOffset) }
+                NarrationProvider.KOKORO -> {
+                    if (KokoroVoicePack.isInstalled(app)) {
+                        startKokoro(startOffset)
+                    } else {
+                        notify("Kokoro is not installed — using system speech")
+                        ensureTtsEngine { beginSpeaking(startOffset) }
+                    }
+                }
+                NarrationProvider.ELEVENLABS -> {
+                    val apiKey = elevenLabsCredentials.read()
+                    val voiceId = settings.elevenLabsVoiceId
+                    if (apiKey == null || voiceId == null) {
+                        notify("Connect ElevenLabs and choose a narrator first")
+                        ttsStatus.value = TtsStatus.OFF
+                    } else {
+                        startElevenLabs(
+                            fromOffset = startOffset,
+                            apiKey = apiKey,
+                            voiceId = voiceId,
+                            model = settings.elevenLabsModel,
+                        )
+                    }
+                }
             }
         }
     }
@@ -655,7 +722,7 @@ class ReaderViewModel(
                 try {
                     for ((base, sentence) in sentenceChunks(text, fromOffset)) {
                         if (!isActive) break
-                        val pcm = engine.synthesize(sentence, kokoroSid, ttsSpeed) ?: continue
+                        val pcm = engine.synthesize(sentence, kokoroSid, ttsSpeed.value) ?: continue
                         channel.send(Triple(base, sentence.length, pcm))
                     }
                 } finally {
@@ -678,6 +745,186 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * Cloud path: generate one short passage ahead, cache it permanently, then
+     * play locally. Character timestamps drive word highlighting while local
+     * playback speed avoids paid regeneration when the listener changes rate.
+     */
+    private fun startElevenLabs(
+        fromOffset: Int,
+        apiKey: String,
+        voiceId: String,
+        model: ElevenLabsModel,
+    ) {
+        val text = chapterText(_ui.value.chapterIndex) ?: return
+        // Always segment from the chapter origin. A resume seeks into the
+        // first stable passage instead of changing the paid request shape.
+        val allChunks = sentenceChunks(text, 0)
+        val firstChunkIndex = allChunks.indexOfFirst { (base, passage) -> fromOffset < base + passage.length }
+        if (firstChunkIndex < 0) return
+        val chunks = allChunks.drop(firstChunkIndex)
+        if (chunks.isEmpty()) return
+        ttsStatus.value = TtsStatus.PREPARING
+        elevenLabsJob?.cancel()
+        elevenLabsPlayback.cancel()
+        elevenLabsPlayback.resetCancel()
+        elevenLabsJob = viewModelScope.launch(Dispatchers.IO) {
+            updateElevenLabsCacheStatus(allChunks, voiceId, model)
+            val channel = Channel<ElevenLabsSegment>(capacity = 1)
+            val producer = launch {
+                try {
+                    chunks.forEachIndexed { index, (base, passage) ->
+                        val stableIndex = firstChunkIndex + index
+                        val request = elevenLabsRequest(allChunks, stableIndex, voiceId, model)
+                        val existing = elevenLabsCache.get(request)
+                        val cached = existing ?: elevenLabsCache.put(
+                            request,
+                            elevenLabsClient.generate(apiKey, request),
+                        ).also {
+                            elevenLabsCacheStatus.update { status ->
+                                status.copy(
+                                    cachedPassages = (status.cachedPassages + 1)
+                                        .coerceAtMost(status.totalPassages),
+                                    storedBytes = elevenLabsCache.sizeBytes(),
+                                )
+                            }
+                        }
+                        channel.send(
+                            ElevenLabsSegment(
+                                base = base,
+                                text = passage,
+                                narration = cached,
+                                relativeStartChar = if (index == 0) {
+                                    (fromOffset - base).coerceIn(0, passage.lastIndex.coerceAtLeast(0))
+                                } else 0,
+                            ),
+                        )
+                    }
+                    channel.close()
+                } catch (e: Throwable) {
+                    channel.close(e)
+                }
+            }
+            try {
+                for (segment in channel) {
+                    if (ttsStatus.value == TtsStatus.PREPARING) {
+                        ttsStatus.value = TtsStatus.PLAYING
+                    }
+                    var lastRange: SelectionRange? = null
+                    val completed = elevenLabsPlayback.play(
+                        narration = segment.narration,
+                        speed = ttsSpeed.value,
+                        startPositionMs = segment.narration.characterStartSeconds
+                            .getOrNull(segment.relativeStartChar)
+                            ?.times(1000.0)
+                            ?.toInt()
+                            ?: 0,
+                    ) { positionMs ->
+                        val charIndex = alignmentIndex(
+                            segment.narration.characterStartSeconds,
+                            positionMs / 1000.0,
+                        ).coerceIn(0, segment.text.lastIndex.coerceAtLeast(0))
+                        val bounds = wordBounds(segment.text, charIndex)
+                        val range = SelectionRange(segment.base + bounds.first, segment.base + bounds.last + 1)
+                        if (range != lastRange) {
+                            lastRange = range
+                            ttsRange.value = range
+                            val page = currentPage()
+                            if (page != null && range.startChar >= page.endChar) {
+                                viewModelScope.launch(Dispatchers.Main) { nextPage() }
+                            }
+                        }
+                    }
+                    if (!completed) {
+                        producer.cancel()
+                        return@launch
+                    }
+                }
+                withContext(Dispatchers.Main) { stopTts() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("VellumTts", "ElevenLabs narration failed", e)
+                notify(elevenLabsError(e))
+                withContext(Dispatchers.Main) { stopTts() }
+            } finally {
+                producer.cancel()
+                channel.cancel()
+            }
+        }
+    }
+
+    private fun alignmentIndex(starts: List<Double>, positionSeconds: Double): Int {
+        if (starts.isEmpty()) return 0
+        val found = starts.binarySearch(positionSeconds)
+        return if (found >= 0) found else (-found - 2).coerceAtLeast(0)
+    }
+
+    private fun elevenLabsRequest(
+        chunks: List<Pair<Int, String>>,
+        index: Int,
+        voiceId: String,
+        model: ElevenLabsModel,
+    ): ElevenLabsGenerationRequest {
+        val passage = chunks[index].second
+        return ElevenLabsGenerationRequest(
+            voiceId = voiceId,
+            modelId = model.id,
+            text = passage,
+            previousText = chunks.getOrNull(index - 1)?.second,
+            nextText = chunks.getOrNull(index + 1)?.second,
+        )
+    }
+
+    private fun updateElevenLabsCacheStatus(
+        chunks: List<Pair<Int, String>>,
+        voiceId: String,
+        model: ElevenLabsModel,
+    ) {
+        val requests = chunks.indices.map { elevenLabsRequest(chunks, it, voiceId, model) }
+        elevenLabsCacheStatus.value = ElevenLabsCacheStatus(
+            cachedPassages = requests.count(elevenLabsCache::contains),
+            totalPassages = requests.size,
+            storedBytes = elevenLabsCache.sizeBytes(),
+        )
+    }
+
+    fun refreshElevenLabsCacheStatus() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val settings = app.settingsStore.settings.first()
+            val voiceId = settings.elevenLabsVoiceId
+            val text = chapterText(_ui.value.chapterIndex)
+            if (voiceId == null || text == null) {
+                elevenLabsCacheStatus.value = ElevenLabsCacheStatus(
+                    storedBytes = elevenLabsCache.sizeBytes(),
+                )
+                return@launch
+            }
+            val chunks = sentenceChunks(text, 0)
+            updateElevenLabsCacheStatus(chunks, voiceId, settings.elevenLabsModel)
+        }
+    }
+
+    fun clearElevenLabsCache() {
+        if (ttsStatus.value != TtsStatus.OFF) stopTts()
+        viewModelScope.launch(Dispatchers.IO) {
+            elevenLabsCache.clear()
+            elevenLabsCacheStatus.value = elevenLabsCacheStatus.value.copy(
+                cachedPassages = 0,
+                storedBytes = 0,
+            )
+        }
+    }
+
+    private fun wordBounds(text: String, index: Int): IntRange {
+        if (text.isEmpty()) return 0..0
+        var start = index.coerceIn(text.indices)
+        while (start > 0 && !text[start - 1].isWhitespace()) start--
+        var end = index.coerceIn(text.indices)
+        while (end + 1 < text.length && !text[end + 1].isWhitespace()) end++
+        return start..end
+    }
+
     /** Sentence-boundary utterances ≤ ~400 chars, tagged with their offsets. */
     private fun sentenceChunks(text: String, from: Int): List<Pair<Int, String>> {
         val chunks = mutableListOf<Pair<Int, String>>()
@@ -698,10 +945,100 @@ class ReaderViewModel(
         return chunks
     }
 
-    fun setTtsEngine(engine: String) {
+    fun setNarrationProvider(provider: NarrationProvider) {
         viewModelScope.launch {
-            app.settingsStore.setTtsEngine(engine) // persisted before restart reads it
-            if (ttsStatus.value == TtsStatus.PLAYING) {
+            app.settingsStore.setNarrationProvider(provider)
+            if (ttsStatus.value == TtsStatus.PLAYING || ttsStatus.value == TtsStatus.PREPARING) {
+                pauseTts()
+                startTts()
+            } else {
+                tts?.stop()
+                kokoroJob?.cancel()
+                kokoro?.cancel()
+                elevenLabsJob?.cancel()
+                elevenLabsPlayback.cancel()
+            }
+        }
+    }
+
+    fun connectElevenLabs(apiKey: String) {
+        val key = apiKey.trim()
+        if (key.isBlank()) {
+            elevenLabsState.value = elevenLabsState.value.copy(error = "Enter an API key")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            elevenLabsState.value = elevenLabsState.value.copy(loading = true, error = null)
+            try {
+                val subscription = elevenLabsClient.getSubscription(key)
+                val voices = elevenLabsClient.getVoices(key)
+                elevenLabsCredentials.save(key)
+                elevenLabsState.value = ElevenLabsUiState(
+                    connected = true,
+                    voices = voices,
+                    subscription = subscription,
+                )
+            } catch (e: Exception) {
+                elevenLabsState.value = ElevenLabsUiState(
+                    connected = false,
+                    error = elevenLabsError(e),
+                )
+            }
+        }
+    }
+
+    fun refreshElevenLabs() {
+        val key = elevenLabsCredentials.read() ?: run {
+            elevenLabsState.value = ElevenLabsUiState()
+            return
+        }
+        if (elevenLabsState.value.loading) return
+        viewModelScope.launch(Dispatchers.IO) {
+            elevenLabsState.value = elevenLabsState.value.copy(connected = true, loading = true, error = null)
+            try {
+                elevenLabsState.value = ElevenLabsUiState(
+                    connected = true,
+                    voices = elevenLabsClient.getVoices(key),
+                    subscription = elevenLabsClient.getSubscription(key),
+                )
+            } catch (e: Exception) {
+                elevenLabsState.value = elevenLabsState.value.copy(
+                    connected = true,
+                    loading = false,
+                    error = elevenLabsError(e),
+                )
+            }
+        }
+    }
+
+    fun disconnectElevenLabs() {
+        if (ttsStatus.value != TtsStatus.OFF) stopTts()
+        elevenLabsCredentials.clear()
+        elevenLabsState.value = ElevenLabsUiState()
+        viewModelScope.launch {
+            val settings = app.settingsStore.settings.first()
+            if (settings.narrationProvider == NarrationProvider.ELEVENLABS) {
+                app.settingsStore.setNarrationProvider(NarrationProvider.SYSTEM)
+            }
+        }
+    }
+
+    fun setElevenLabsVoice(voice: ElevenLabsVoice) {
+        viewModelScope.launch {
+            app.settingsStore.setElevenLabsVoice(voice.id, voice.name)
+            refreshElevenLabsCacheStatus()
+            if (ttsStatus.value == TtsStatus.PLAYING || ttsStatus.value == TtsStatus.PREPARING) {
+                pauseTts()
+                startTts()
+            }
+        }
+    }
+
+    fun setElevenLabsModel(model: ElevenLabsModel) {
+        viewModelScope.launch {
+            app.settingsStore.setElevenLabsModel(model)
+            refreshElevenLabsCacheStatus()
+            if (ttsStatus.value == TtsStatus.PLAYING || ttsStatus.value == TtsStatus.PREPARING) {
                 pauseTts()
                 startTts()
             }
@@ -732,7 +1069,7 @@ class ReaderViewModel(
                     return@launch
                 }
                 engine.resetCancel()
-                engine.synthesize("The interface disappears, and only the book remains.", sid, ttsSpeed)
+                engine.synthesize("The interface disappears, and only the book remains.", sid, ttsSpeed.value)
                     ?.let { engine.playBlocking(it) }
             }
         }
@@ -776,8 +1113,23 @@ class ReaderViewModel(
         }
     }
 
+    private fun elevenLabsError(error: Throwable): String = when (error) {
+        is ElevenLabsApiException -> when (error.statusCode) {
+            401 -> "ElevenLabs rejected this API key"
+            402 -> "ElevenLabs credits are exhausted"
+            429 -> "ElevenLabs usage limit reached — try again later"
+            else -> error.message ?: "ElevenLabs request failed"
+        }
+        is IOException -> "ElevenLabs needs an internet connection"
+        else -> error.message ?: "ElevenLabs request failed"
+    }
+
     /** Populates the picker: offline voices for the user's language. */
-    fun prepareVoices() = ensureTtsEngine { }
+    fun prepareVoices() {
+        ensureTtsEngine { }
+        if (elevenLabsCredentials.hasKey()) refreshElevenLabs()
+        refreshElevenLabsCacheStatus()
+    }
 
     private fun refreshVoices() {
         val language = java.util.Locale.getDefault().language
@@ -827,6 +1179,8 @@ class ReaderViewModel(
         tts?.stop()
         kokoroJob?.cancel()
         kokoro?.cancel()
+        elevenLabsJob?.cancel()
+        elevenLabsPlayback.cancel()
         ttsRange.value = null
         ttsStatus.value = TtsStatus.PAUSED
     }
@@ -838,22 +1192,19 @@ class ReaderViewModel(
         tts?.stop()
         kokoroJob?.cancel()
         kokoro?.cancel()
+        elevenLabsJob?.cancel()
+        elevenLabsPlayback.cancel()
         ttsRange.value = null
         ttsStatus.value = TtsStatus.OFF
         sleepJob?.cancel()
         ttsSleep.value = TtsSleep.OFF
     }
 
-    /** Cycles 1.0 → 1.2 → 1.5 → 0.8 → 1.0; returns the new rate for the UI. */
-    fun cycleTtsSpeed(): Float {
-        ttsSpeed = when (ttsSpeed) {
-            1.0f -> 1.2f
-            1.2f -> 1.5f
-            1.5f -> 0.8f
-            else -> 1.0f
-        }
-        tts?.setSpeechRate(ttsSpeed)
-        return ttsSpeed
+    /** Applies a directly selected listening speed to subsequent speech. */
+    fun setTtsSpeed(speed: Float) {
+        ttsSpeed.value = speed.coerceIn(0.5f, 2.0f)
+        tts?.setSpeechRate(ttsSpeed.value)
+        elevenLabsPlayback.setSpeed(ttsSpeed.value)
     }
 
     fun cycleSleepTimer() {
@@ -875,7 +1226,7 @@ class ReaderViewModel(
         ttsChunkIndex = 0
         if (ttsChunks.isEmpty()) return
         ttsStatus.value = TtsStatus.PLAYING
-        tts?.setSpeechRate(ttsSpeed)
+        tts?.setSpeechRate(ttsSpeed.value)
         speakChunk(0)
     }
 
@@ -941,6 +1292,8 @@ class ReaderViewModel(
         tts?.shutdown()
         kokoroJob?.cancel()
         kokoro?.release()
+        elevenLabsJob?.cancel()
+        elevenLabsPlayback.cancel()
         // Record the sitting for insights — but only real ones (30s+).
         val elapsed = System.currentTimeMillis() - sessionStartedAt
         if (elapsed >= 30_000) {
