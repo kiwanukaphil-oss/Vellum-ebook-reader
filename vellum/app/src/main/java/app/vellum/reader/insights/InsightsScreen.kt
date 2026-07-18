@@ -15,9 +15,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -31,6 +33,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.ReadingSessionEntity
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
@@ -48,15 +51,18 @@ data class InsightsState(
     val totalPages: Int = 0,
     val pagesPerHour: Int? = null,
     val perBook: List<BookTime> = emptyList(),
+    val yearMs: Long = 0,
+    val yearlyGoalMinutes: Int = 0,
 )
 
 /** Derives every stat from raw session rows — nothing is stored precomputed. */
-class InsightsViewModel(app: VellumApp) : ViewModel() {
+class InsightsViewModel(private val app: VellumApp) : ViewModel() {
 
     val state = combine(
         app.sessionDao.observeAll(),
         app.bookDao.observeShelf(),
-    ) { sessions, books ->
+        app.settingsStore.settings,
+    ) { sessions, books, settings ->
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
         fun dayOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
@@ -75,6 +81,9 @@ class InsightsViewModel(app: VellumApp) : ViewModel() {
         val todayMs = sessions.filter { dayOf(it.startedAt) == today }.sumOf(ReadingSessionEntity::msRead)
         val weekMs = sessions.filter { dayOf(it.startedAt) >= weekStart }.sumOf(ReadingSessionEntity::msRead)
         val totalMs = sessions.sumOf(ReadingSessionEntity::msRead)
+        val yearMs = sessions.filter {
+            Instant.ofEpochMilli(it.startedAt).atZone(zone).year == today.year
+        }.sumOf(ReadingSessionEntity::msRead)
         val totalPages = sessions.sumOf(ReadingSessionEntity::pagesTurned)
         val pagesPerHour =
             if (totalMs > 10 * 60_000L && totalPages > 0) ((totalPages * 3_600_000.0) / totalMs).toInt()
@@ -86,8 +95,15 @@ class InsightsViewModel(app: VellumApp) : ViewModel() {
             .sortedByDescending { it.ms }
             .take(8)
 
-        InsightsState(streak, todayMs, weekMs, totalMs, totalPages, pagesPerHour, perBook)
+        InsightsState(
+            streak, todayMs, weekMs, totalMs, totalPages, pagesPerHour, perBook,
+            yearMs, settings.yearlyGoalMinutes,
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), InsightsState())
+
+    fun setYearlyGoalHours(hours: Int) {
+        viewModelScope.launch { app.settingsStore.setYearlyGoalMinutes(hours.coerceAtLeast(0) * 60) }
+    }
 }
 
 /** Reading insights — presented as quiet numbers, never as a game. */
@@ -125,6 +141,14 @@ fun InsightsScreen(onBack: (() -> Unit)? = null) {
                     StatCard("Today", formatDuration(state.todayMs), Modifier.weight(1f))
                     StatCard("This week", formatDuration(state.weekMs), Modifier.weight(1f))
                 }
+            }
+            item {
+                YearGoalCard(
+                    yearMs = state.yearMs,
+                    goalMinutes = state.yearlyGoalMinutes,
+                    onGoalHours = viewModel::setYearlyGoalHours,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                )
             }
             item {
                 Row(
@@ -173,6 +197,38 @@ fun InsightsScreen(onBack: (() -> Unit)? = null) {
                         modifier = Modifier.padding(20.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun YearGoalCard(
+    yearMs: Long,
+    goalMinutes: Int,
+    onGoalHours: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Yearly reading goal", style = MaterialTheme.typography.titleSmall)
+            if (goalMinutes > 0) {
+                val goalMs = goalMinutes * 60_000L
+                val percent = (yearMs.toDouble() / goalMs).coerceIn(0.0, 1.0).toFloat()
+                Text("${formatDuration(yearMs)} of ${goalMinutes / 60}h")
+                LinearProgressIndicator(progress = { percent }, modifier = Modifier.fillMaxWidth())
+            } else {
+                Text(
+                    "Choose a quiet annual target. Progress counts active reading time only.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(50, 100, 200).forEach { hours ->
+                    TextButton(onClick = { onGoalHours(hours) }) { Text("${hours}h") }
+                }
+                if (goalMinutes > 0) TextButton(onClick = { onGoalHours(0) }) { Text("Off") }
             }
         }
     }

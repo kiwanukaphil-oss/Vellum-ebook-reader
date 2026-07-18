@@ -3,6 +3,7 @@ package app.vellum.reader.library
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookCollectionCrossRef
 import app.vellum.reader.core.data.BookEntity
@@ -15,7 +16,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
@@ -116,9 +119,17 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
     val syncing = MutableStateFlow(false)
 
     init {
-        viewModelScope.launch { importer.scanDropFolder() }
-        // Auto-sync on open when a folder is configured.
         viewModelScope.launch {
+            app.bookDao.observeShelf().collect { books ->
+                val liveUuids = books.mapTo(mutableSetOf()) { it.uuid }
+                _selected.value = _selected.value.intersect(liveUuids)
+            }
+        }
+        viewModelScope.launch {
+            // Let the first shelf frame render before asset scanning and folder
+            // sync contend for storage/Room on a cold start.
+            delay(600)
+            importer.scanDropFolder()
             val settings = app.settingsStore.settings.first()
             settings.syncFolderUri?.let { syncNow(it) }
         }
@@ -168,8 +179,10 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
     }
 
     fun deleteBooks(uuids: Set<String>) {
-        state.value.books.filter { it.uuid in uuids }.forEach(::deleteBook)
         clearSelection()
+        viewModelScope.launch {
+            uuids.mapNotNull { app.bookDao.byUuid(it) }.forEach { deleteBookNow(it) }
+        }
     }
 
     /** Adds or removes every book in [bookUuids] from a collection at once. */
@@ -271,15 +284,21 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
      */
     fun deleteBook(book: BookEntity) {
         viewModelScope.launch {
-            val now = System.currentTimeMillis()
+            deleteBookNow(book)
+        }
+    }
+
+    private suspend fun deleteBookNow(book: BookEntity) {
+        val now = System.currentTimeMillis()
+        app.database.withTransaction {
             app.bookDao.softDelete(book.uuid, now)
             app.bookDao.deletePosition(book.uuid)
             app.annotationDao.softDeleteForBook(book.uuid, now)
             app.pdfStrokeDao.softDeleteForBook(book.uuid, now)
             app.comicPanelDao.softDeleteForBook(book.uuid, now)
             app.searchDao.deleteForBook(book.uuid)
-            File(app.booksDir, book.fileName).delete()
-            book.coverPath?.let { File(it).delete() }
         }
+        File(app.booksDir, book.fileName).delete()
+        book.coverPath?.let { File(it).delete() }
     }
 }

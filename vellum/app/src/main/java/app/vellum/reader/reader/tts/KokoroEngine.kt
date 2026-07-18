@@ -8,19 +8,19 @@ import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Kokoro-82M via sherpa-onnx: fully on-device neural speech. Synthesis
- * streams through [OfflineTts.generateWithCallback] straight into an
- * AudioTrack, so speech starts as soon as the first chunk exists and stops
+ * uses the stable non-streaming JNI path, then writes PCM to an
+ * AudioTrack in cancellable slices so playback still stops promptly
  * mid-sentence on cancel. One instance holds the loaded model (~2–4s init);
  * keep it for the whole reading session.
  */
 class KokoroEngine(modelDir: File) {
 
     private val tts: OfflineTts
-    private val cancelled = AtomicBoolean(false)
+    private val generation = AtomicLong(0L)
     private var track: AudioTrack? = null
 
     init {
@@ -40,7 +40,8 @@ class KokoroEngine(modelDir: File) {
 
     val sampleRate: Int get() = tts.sampleRate()
 
-    fun resetCancel() = cancelled.set(false)
+    /** A monotonically unique playback generation; cancelled work can never rejoin. */
+    fun beginSession(): Long = generation.incrementAndGet()
 
     /**
      * Synthesis only — runs on the producer coroutine so the next sentence is
@@ -49,33 +50,33 @@ class KokoroEngine(modelDir: File) {
      * (Plain generate() is deliberate: sherpa-onnx 1.13.4's streaming-callback
      * JNI path trips a CheckJNI abort.)
      */
-    fun synthesize(text: String, speakerId: Int, speed: Float): ShortArray? {
-        if (cancelled.get()) return null
+    fun synthesize(text: String, speakerId: Int, speed: Float, session: Long): ShortArray? {
+        if (generation.get() != session) return null
         val result = tts.generate(text, speakerId, speed)
-        if (cancelled.get() || result.samples.isEmpty()) return null
+        if (generation.get() != session || result.samples.isEmpty()) return null
         return ShortArray(result.samples.size) { i ->
             (result.samples[i] * 32767f).coerceIn(-32768f, 32767f).toInt().toShort()
         }
     }
 
     /** Streams one synthesized utterance; blocking; false if cancelled. */
-    fun playBlocking(pcm: ShortArray): Boolean {
-        if (cancelled.get()) return false
+    fun playBlocking(pcm: ShortArray, session: Long): Boolean {
+        if (generation.get() != session) return false
         val audioTrack = obtainTrack() ?: return false // no usable audio output
         audioTrack.play()
         val slice = sampleRate / 4 // 250ms of audio per write
         var offset = 0
         while (offset < pcm.size) {
-            if (cancelled.get()) return false
+            if (generation.get() != session) return false
             val count = minOf(slice, pcm.size - offset)
             audioTrack.write(pcm, offset, count, AudioTrack.WRITE_BLOCKING)
             offset += count
         }
-        return !cancelled.get()
+        return generation.get() == session
     }
 
     fun cancel() {
-        cancelled.set(true)
+        generation.incrementAndGet()
         track?.let {
             try {
                 it.pause()

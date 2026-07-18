@@ -15,6 +15,9 @@ interface ComicPanelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(panel: ComicPanelEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(panels: List<ComicPanelEntity>)
+
     @Query("SELECT COALESCE(MAX(ord), -1) + 1 FROM comic_panels WHERE bookUuid = :bookUuid AND pageIndex = :pageIndex AND deletedAt IS NULL")
     suspend fun nextOrdinal(bookUuid: String, pageIndex: Int): Int
 
@@ -29,4 +32,7 @@ interface ComicPanelDao {
 
     @Query("SELECT * FROM comic_panels")
     suspend fun allRaw(): List<ComicPanelEntity>
+
+    @Query("DELETE FROM comic_panels WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeTombstones(cutoff: Long)
 }

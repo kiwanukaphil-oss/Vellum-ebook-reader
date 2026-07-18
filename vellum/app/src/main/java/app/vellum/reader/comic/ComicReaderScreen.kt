@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.ComicPanelEntity
+import app.vellum.reader.core.session.ActiveReadingEffect
 import app.vellum.reader.core.theme.sharedCoverBounds
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
@@ -88,6 +89,7 @@ fun ComicReaderScreen(bookUuid: String, onBack: () -> Unit) {
     val app = LocalContext.current.applicationContext as VellumApp
     val viewModel: ComicReaderViewModel = viewModel(key = "comic-$bookUuid") { ComicReaderViewModel(app, bookUuid) }
     val ui by viewModel.ui.collectAsState()
+    ActiveReadingEffect(viewModel::setSessionActive)
     val panelsByPage by viewModel.panelsByPage.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize().sharedCoverBounds(bookUuid).background(Color.Black)) {

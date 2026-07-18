@@ -3,14 +3,14 @@ package app.vellum.reader.core.data
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 
-/** One full-text hit: a chapter containing the term, with a preview snippet. */
-data class PassageHit(
+/** One matching FTS chapter; occurrences are expanded in the ViewModel. */
+data class ChapterSearchHit(
     val bookUuid: String,
+    val bookTitle: String,
     val chapterIndex: String,
-    val snippet: String,
-    /** 0-based character offset of the first match in the chapter body. */
-    val firstMatchOffset: Int,
+    val body: String,
 )
 
 @Dao
@@ -25,27 +25,34 @@ interface SearchDao {
     @Query("SELECT COUNT(*) FROM book_text_fts WHERE bookUuid = :bookUuid")
     suspend fun chapterCountForBook(bookUuid: String): Int
 
-    @Query(
-        """
-        SELECT bookUuid, chapterIndex,
-               snippet(book_text_fts, '⟪', '⟫', '…', 2, 12) AS snippet,
-               (instr(lower(body), lower(:rawTerm)) - 1) AS firstMatchOffset
-        FROM book_text_fts
-        WHERE body MATCH :ftsQuery
-        LIMIT 60
-        """,
-    )
-    suspend fun searchAllBooks(ftsQuery: String, rawTerm: String): List<PassageHit>
+    /** Delete-then-insert is one transaction, so search never sees half an index. */
+    @Transaction
+    suspend fun replaceForBook(bookUuid: String, rows: List<BookTextFts>) {
+        deleteForBook(bookUuid)
+        rows.forEach { insertChapterText(it) }
+    }
 
     @Query(
         """
-        SELECT bookUuid, chapterIndex,
-               snippet(book_text_fts, '⟪', '⟫', '…', 2, 12) AS snippet,
-               (instr(lower(body), lower(:rawTerm)) - 1) AS firstMatchOffset
-        FROM book_text_fts
-        WHERE body MATCH :ftsQuery AND bookUuid = :bookUuid
+        SELECT f.bookUuid AS bookUuid, b.title AS bookTitle,
+               f.chapterIndex AS chapterIndex, f.body AS body
+        FROM book_text_fts AS f
+        JOIN books AS b ON b.uuid = f.bookUuid
+        WHERE book_text_fts MATCH :ftsQuery AND b.deletedAt IS NULL
         LIMIT 60
         """,
     )
-    suspend fun searchInBook(bookUuid: String, ftsQuery: String, rawTerm: String): List<PassageHit>
+    suspend fun searchAllBooks(ftsQuery: String): List<ChapterSearchHit>
+
+    @Query(
+        """
+        SELECT f.bookUuid AS bookUuid, b.title AS bookTitle,
+               f.chapterIndex AS chapterIndex, f.body AS body
+        FROM book_text_fts AS f
+        JOIN books AS b ON b.uuid = f.bookUuid
+        WHERE book_text_fts MATCH :ftsQuery AND f.bookUuid = :bookUuid AND b.deletedAt IS NULL
+        LIMIT 60
+        """,
+    )
+    suspend fun searchInBook(bookUuid: String, ftsQuery: String): List<ChapterSearchHit>
 }

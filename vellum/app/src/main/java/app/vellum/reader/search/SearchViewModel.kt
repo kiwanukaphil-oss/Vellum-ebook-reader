@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookEntity
+import app.vellum.reader.core.data.ChapterSearchHit
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,11 +28,7 @@ data class SearchState(
     val searching: Boolean = false,
 )
 
-/**
- * Full-text search over the FTS index. With [scopeBookUuid] set it searches
- * inside one book (reader search); otherwise the whole library, with
- * title/author matches listed above passage hits.
- */
+/** Full-text search for the library or a single open book. */
 class SearchViewModel(
     private val app: VellumApp,
     private val scopeBookUuid: String?,
@@ -39,14 +36,11 @@ class SearchViewModel(
 
     private val _state = MutableStateFlow(SearchState())
     val state: StateFlow<SearchState> = _state
-
     private val queryFlow = MutableStateFlow("")
 
     init {
         viewModelScope.launch {
             @OptIn(FlowPreview::class)
-            // collectLatest: typing cancels the in-flight search instead of
-            // queueing behind it.
             queryFlow.debounce(250).collectLatest { runSearch(it) }
         }
     }
@@ -59,29 +53,90 @@ class SearchViewModel(
     private suspend fun runSearch(query: String) {
         val term = query.trim()
         if (term.length < 2) {
-            _state.value = _state.value.copy(bookMatches = emptyList(), passageMatches = emptyList(), searching = false)
+            _state.value = _state.value.copy(
+                bookMatches = emptyList(),
+                passageMatches = emptyList(),
+                searching = false,
+            )
             return
         }
         _state.value = _state.value.copy(searching = true)
         // Quoting makes user text a phrase query, inert to FTS operator syntax.
         val ftsQuery = "\"${term.replace("\"", "")}\""
-        val titlesByUuid = app.bookDao.allActive().associateBy({ it.uuid }, { it.title })
-        val passages = (
-            if (scopeBookUuid != null) app.searchDao.searchInBook(scopeBookUuid, ftsQuery, term)
-            else app.searchDao.searchAllBooks(ftsQuery, term)
-            ).mapNotNull { hit ->
-            val title = titlesByUuid[hit.bookUuid] ?: return@mapNotNull null
-            PassageResult(
-                bookUuid = hit.bookUuid,
-                bookTitle = title,
-                chapterIndex = hit.chapterIndex.toIntOrNull() ?: 0,
-                snippet = hit.snippet,
-                charOffset = hit.firstMatchOffset.coerceAtLeast(0),
-            )
+        val chapters = if (scopeBookUuid != null) {
+            app.searchDao.searchInBook(scopeBookUuid, ftsQuery)
+        } else {
+            app.searchDao.searchAllBooks(ftsQuery)
         }
-        val books =
-            if (scopeBookUuid == null) app.bookDao.searchByTitleOrAuthor(term)
-            else emptyList()
-        _state.value = _state.value.copy(bookMatches = books, passageMatches = passages, searching = false)
+        val passages = expandPassageHits(chapters, term)
+        val books = if (scopeBookUuid == null) {
+            app.bookDao.searchByTitleOrAuthor(escapeLike(term))
+        } else {
+            emptyList()
+        }
+        _state.value = _state.value.copy(
+            bookMatches = books,
+            passageMatches = passages,
+            searching = false,
+        )
     }
+}
+
+internal fun escapeLike(value: String): String = value
+    .replace("\\", "\\\\")
+    .replace("%", "\\%")
+    .replace("_", "\\_")
+
+/** Expands each matching FTS chapter into one result per occurrence. */
+internal fun expandPassageHits(
+    chapters: List<ChapterSearchHit>,
+    term: String,
+): List<PassageResult> = buildList {
+    if (term.isBlank()) return@buildList
+    val rankedChapters = chapters.sortedWith(
+        compareByDescending<ChapterSearchHit> { occurrenceCount(it.body, term) }
+            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.bookTitle }
+            .thenBy { it.chapterIndex.toIntOrNull() ?: Int.MAX_VALUE },
+    )
+    for (chapter in rankedChapters) {
+        var from = 0
+        while (size < MAX_PASSAGE_RESULTS) {
+            val offset = chapter.body.indexOf(term, startIndex = from, ignoreCase = true)
+            if (offset < 0) break
+            val start = (offset - 54).coerceAtLeast(0)
+            val end = (offset + term.length + 72).coerceAtMost(chapter.body.length)
+            val before = chapter.body.substring(start, offset).trimStart()
+            val match = chapter.body.substring(offset, offset + term.length)
+            val after = chapter.body.substring(offset + term.length, end).trimEnd()
+            add(
+                PassageResult(
+                    bookUuid = chapter.bookUuid,
+                    bookTitle = chapter.bookTitle,
+                    chapterIndex = chapter.chapterIndex.toIntOrNull() ?: 0,
+                    snippet = buildString {
+                        if (start > 0) append('…')
+                        append(before).append('⟪').append(match).append('⟫').append(after)
+                        if (end < chapter.body.length) append('…')
+                    },
+                    charOffset = offset,
+                ),
+            )
+            from = offset + term.length.coerceAtLeast(1)
+        }
+        if (size >= MAX_PASSAGE_RESULTS) break
+    }
+}
+
+private const val MAX_PASSAGE_RESULTS = 100
+
+private fun occurrenceCount(body: String, term: String): Int {
+    var count = 0
+    var from = 0
+    while (from < body.length) {
+        val offset = body.indexOf(term, startIndex = from, ignoreCase = true)
+        if (offset < 0) break
+        count++
+        from = offset + term.length.coerceAtLeast(1)
+    }
+    return count
 }

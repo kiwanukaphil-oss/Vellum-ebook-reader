@@ -19,7 +19,6 @@ object PageCurlShader {
     private const val SOURCE = """
         uniform float2 resolution;
         uniform float progress;    // 0 = flat, 1 = fully turned
-        uniform float direction;   // 1 forward (curl from right), 0 backward (from left)
         uniform float radius;      // cylinder radius in px
         uniform float4 paper;      // theme page color, used to wash the paper back
         uniform shader front;      // the page being turned
@@ -27,12 +26,8 @@ object PageCurlShader {
 
         const float PI = 3.14159265;
 
-        float2 flipX(float2 p) {
-            return float2(mix(p.x, resolution.x - p.x, direction), p.y);
-        }
-
-        half4 sampleFront(float2 p) { return front.eval(flipX(p)); }
-        half4 sampleUnder(float2 p) { return under.eval(flipX(p)); }
+        half4 sampleFront(float2 p) { return front.eval(p); }
+        half4 sampleUnder(float2 p) { return under.eval(p); }
 
         half4 backFace(float srcX, float y) {
             half4 ink = sampleFront(float2(srcX, y));
@@ -43,7 +38,7 @@ object PageCurlShader {
         half4 main(float2 fragCoord) {
             float w = resolution.x;
             // Work in "forward" space: page peels from the right edge.
-            float2 p = flipX(fragCoord);
+            float2 p = fragCoord;
             float x = p.x;
             float y = p.y;
 
@@ -118,7 +113,6 @@ object PageCurlShader {
         width: Float,
         height: Float,
         progress: Float,
-        forward: Boolean,
         radiusPx: Float,
         paperColor: Color,
         frontPage: ImageBitmap,
@@ -131,7 +125,6 @@ object PageCurlShader {
         // never mirrored: the returning page unrolls from the left and its fold
         // sweeps rightward, matching a real book. Mirroring here would make the
         // page enter from the right — exactly where the reader's finger isn't.
-        shader.setFloatUniform("direction", 0f)
         shader.setFloatUniform("radius", radiusPx)
         shader.setFloatUniform("paper", paperColor.red, paperColor.green, paperColor.blue, 1f)
         shader.setInputShader(

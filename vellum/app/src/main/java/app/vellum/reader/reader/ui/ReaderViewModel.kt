@@ -1,6 +1,5 @@
 package app.vellum.reader.reader.ui
 
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.vellum.reader.VellumApp
@@ -23,9 +22,6 @@ import app.vellum.reader.core.settings.ElevenLabsModel
 import app.vellum.reader.core.settings.NarrationProvider
 import app.vellum.reader.reader.tts.CachedElevenLabsNarration
 import app.vellum.reader.reader.tts.ElevenLabsApiException
-import app.vellum.reader.reader.tts.ElevenLabsAudioCache
-import app.vellum.reader.reader.tts.ElevenLabsClient
-import app.vellum.reader.reader.tts.ElevenLabsCredentialStore
 import app.vellum.reader.reader.tts.ElevenLabsGenerationRequest
 import app.vellum.reader.reader.tts.ElevenLabsPlayback
 import app.vellum.reader.reader.tts.ElevenLabsSubscription
@@ -33,7 +29,7 @@ import app.vellum.reader.reader.tts.ElevenLabsVoice
 import app.vellum.reader.reader.tts.KokoroEngine
 import app.vellum.reader.reader.tts.KokoroVoicePack
 import kotlinx.coroutines.isActive
-import app.vellum.reader.core.data.ReadingSessionEntity
+import app.vellum.reader.core.session.ActiveReadingSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,12 +39,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /** Identity of one rendered page; layoutVersion changes force page re-resolution. */
 data class PageKey(val layoutVersion: Int, val chapterIndex: Int, val pageIndex: Int)
@@ -138,7 +136,7 @@ class ReaderViewModel(
     private val reanchoredChapters = mutableSetOf<Int>()
 
     // ---- Session recording (feeds insights) ------------------------------
-    private val sessionStartedAt = System.currentTimeMillis()
+    private val readingSession = ActiveReadingSession()
     private var pagesTurned = 0
 
     // ---- Text-to-speech ---------------------------------------------------
@@ -153,16 +151,16 @@ class ReaderViewModel(
     // Kokoro neural engine state
     val kokoroInstalled = MutableStateFlow(app.let { KokoroVoicePack.isInstalled(it) })
     val kokoroDownloadProgress = MutableStateFlow<Float?>(null)
+    private val elevenLabsCredentials = app.elevenLabsCredentials
     val elevenLabsState = MutableStateFlow(
-        ElevenLabsUiState(connected = ElevenLabsCredentialStore(app).hasKey()),
+        ElevenLabsUiState(connected = elevenLabsCredentials.hasKey()),
     )
     val elevenLabsCacheStatus = MutableStateFlow(ElevenLabsCacheStatus())
     private var kokoro: KokoroEngine? = null
     private var kokoroJob: kotlinx.coroutines.Job? = null
-    private val elevenLabsCredentials = ElevenLabsCredentialStore(app)
-    private val elevenLabsClient = ElevenLabsClient()
-    private val elevenLabsCache = ElevenLabsAudioCache(app)
-    private val elevenLabsPlayback = ElevenLabsPlayback()
+    private val elevenLabsClient = app.elevenLabsClient
+    private val elevenLabsCache = app.elevenLabsCache
+    private val elevenLabsPlayback = ElevenLabsPlayback(app)
     private var elevenLabsJob: kotlinx.coroutines.Job? = null
     private var kokoroSid = 0
     private var tts: TextToSpeech? = null
@@ -179,13 +177,13 @@ class ReaderViewModel(
 
     private var epub: OpenedEpub? = null
     private var paginator: ChapterPaginator? = null
-    private val blocksCache = mutableMapOf<Int, List<ContentBlock>>()
+    private val blocksCache = ConcurrentHashMap<Int, List<ContentBlock>>()
 
-    /** Observed by the page canvas; state map so recomposition sees new chapters. */
-    private val paginatedCache = mutableStateMapOf<Int, PaginatedChapter>()
+    private val paginatedCache = ConcurrentHashMap<Int, PaginatedChapter>()
 
     /** Decoded chapter images (src → bitmap), downscaled to the column width. */
-    private val imagesCache = mutableStateMapOf<Int, Map<String, ImageBitmap>>()
+    private val imagesCache = ConcurrentHashMap<Int, Map<String, ImageBitmap>>()
+    private val paginationMutex = Mutex()
 
     fun imagesFor(chapterIndex: Int): Map<String, ImageBitmap> = imagesCache[chapterIndex] ?: emptyMap()
 
@@ -200,6 +198,7 @@ class ReaderViewModel(
     private fun alignToSpread(page: Int) = page - page % spreadSize
 
     init {
+        if (elevenLabsCredentials.hasKey()) refreshElevenLabs()
         viewModelScope.launch {
             val book = app.bookDao.byUuid(bookUuid)
             if (book == null) {
@@ -249,6 +248,8 @@ class ReaderViewModel(
 
     fun nextPage() = turnPage(forward = true)
 
+    fun setSessionActive(active: Boolean) = readingSession.setActive(active)
+
     fun prevPage() = turnPage(forward = false)
 
     /**
@@ -279,7 +280,7 @@ class ReaderViewModel(
         val state = _ui.value
         val remaining = (state.pageCount - state.pageIndex - 1).coerceAtLeast(0)
         if (remaining == 0) return null
-        val avgMsPerPage = (System.currentTimeMillis() - sessionStartedAt) / pagesTurned
+        val avgMsPerPage = readingSession.elapsedMs() / pagesTurned
         return ((remaining * avgMsPerPage) / 60_000L).toInt().coerceAtLeast(1)
     }
 
@@ -388,20 +389,39 @@ class ReaderViewModel(
 
     private suspend fun ensurePaginated(chapterIndex: Int): PaginatedChapter? {
         paginatedCache[chapterIndex]?.let { return it }
-        val opened = epub ?: return null
-        val pager = paginator ?: return null
-        return withContext(Dispatchers.Default) {
-            val blocks = blocksCache.getOrPut(chapterIndex) {
-                val html = opened.chapterHtml(chapterIndex) ?: return@withContext null
-                HtmlBlockParser.parse(html)
+        return paginationMutex.withLock {
+            paginatedCache[chapterIndex]?.let { return@withLock it }
+            val opened = epub ?: return@withLock null
+            val pager = paginator ?: return@withLock null
+            val result = withContext(Dispatchers.Default) {
+                val blocks = blocksCache[chapterIndex] ?: run {
+                    val html = opened.chapterHtml(chapterIndex) ?: return@withContext null
+                    HtmlBlockParser.parse(html).also { blocksCache[chapterIndex] = it }
+                }
+                val images = imagesCache[chapterIndex] ?: loadChapterImages(
+                    opened, chapterIndex, blocks, pager.contentWidthPx,
+                ).also { imagesCache[chapterIndex] = it }
+                pager.paginate(blocks, images.mapValues { (_, bitmap) -> IntSize(bitmap.width, bitmap.height) })
             }
-            val images = imagesCache.getOrPut(chapterIndex) {
-                loadChapterImages(opened, chapterIndex, blocks, pager.contentWidthPx)
+            result?.also {
+                paginatedCache[chapterIndex] = it
+                trimChapterCache(blocksCache, 6)
+                trimChapterCache(paginatedCache, 6)
+                trimChapterCache(imagesCache, 3)
+                reanchorAnnotations(chapterIndex)
             }
-            pager.paginate(blocks, images.mapValues { (_, bitmap) -> IntSize(bitmap.width, bitmap.height) })
-        }?.also {
-            paginatedCache[chapterIndex] = it
-            reanchorAnnotations(chapterIndex)
+        }
+    }
+
+    private fun <T> trimChapterCache(cache: ConcurrentHashMap<Int, T>, maximum: Int) {
+        while (cache.size > maximum) {
+            val current = _ui.value.chapterIndex
+            val victim = cache.keys.maxByOrNull { kotlin.math.abs(it - current) } ?: return
+            if (victim == current && cache.size > 1) {
+                cache.keys.firstOrNull { it != current }?.let(cache::remove)
+            } else {
+                cache.remove(victim)
+            }
         }
     }
 
@@ -638,11 +658,21 @@ class ReaderViewModel(
                     chapterIndex = state.chapterIndex,
                     chapterHref = opened.chapterHref(state.chapterIndex),
                     charOffset = page.startChar,
-                    progression = if (total > 0) page.startChar.toDouble() / total else 0.0,
+                    progression = overallProgression(state, page.startChar, total),
                     updatedAt = System.currentTimeMillis(),
                 ),
             )
         }
+    }
+
+    private fun overallProgression(state: ReaderUiState, charOffset: Int, chapterChars: Int): Double {
+        if (state.chapterCount <= 0) return 0.0
+        val chapterProgress = when {
+            state.pageCount > 0 && state.pageIndex + spreadSize >= state.pageCount -> 1.0
+            chapterChars > 0 -> charOffset.toDouble() / chapterChars
+            else -> 0.0
+        }
+        return ((state.chapterIndex + chapterProgress) / state.chapterCount).coerceIn(0.0, 1.0)
     }
 
     // ---- Text-to-speech ---------------------------------------------------
@@ -678,8 +708,8 @@ class ReaderViewModel(
                     val apiKey = elevenLabsCredentials.read()
                     val voiceId = settings.elevenLabsVoiceId
                     if (apiKey == null || voiceId == null) {
-                        notify("Connect ElevenLabs and choose a narrator first")
-                        ttsStatus.value = TtsStatus.OFF
+                        notify("ElevenLabs isn't ready — using system speech")
+                        ensureTtsEngine { beginSpeaking(startOffset) }
                     } else {
                         startElevenLabs(
                             fromOffset = startOffset,
@@ -705,6 +735,7 @@ class ReaderViewModel(
         // honest about it instead of showing a "Pause" that pauses nothing.
         ttsStatus.value = TtsStatus.PREPARING
         kokoroJob?.cancel()
+        kokoro?.cancel()
         kokoroJob = viewModelScope.launch(Dispatchers.Default) {
             val engine = kokoro ?: try {
                 KokoroEngine(KokoroVoicePack.modelDir(app)).also { kokoro = it }
@@ -716,13 +747,13 @@ class ReaderViewModel(
                 }
                 return@launch
             }
-            engine.resetCancel()
+            val session = engine.beginSession()
             val channel = kotlinx.coroutines.channels.Channel<Triple<Int, Int, ShortArray>>(capacity = 2)
             val producer = launch {
                 try {
                     for ((base, sentence) in sentenceChunks(text, fromOffset)) {
                         if (!isActive) break
-                        val pcm = engine.synthesize(sentence, kokoroSid, ttsSpeed.value) ?: continue
+                        val pcm = engine.synthesize(sentence, kokoroSid, ttsSpeed.value, session) ?: continue
                         channel.send(Triple(base, sentence.length, pcm))
                     }
                 } finally {
@@ -736,17 +767,17 @@ class ReaderViewModel(
                     val page = currentPage()
                     if (page != null && base >= page.endChar) nextPage()
                 }
-                if (!engine.playBlocking(pcm)) {
+                if (!engine.playBlocking(pcm, session)) {
                     producer.cancel()
                     return@launch
                 }
             }
-            withContext(Dispatchers.Main) { stopTts() }
+            onNarrationChapterComplete()
         }
     }
 
     /**
-     * Cloud path: generate one short passage ahead, cache it permanently, then
+     * Cloud path: generate one short passage ahead, keep it in the bounded cache, then
      * play locally. Character timestamps drive word highlighting while local
      * playback speed avoids paid regeneration when the listener changes rate.
      */
@@ -776,17 +807,18 @@ class ReaderViewModel(
                     chunks.forEachIndexed { index, (base, passage) ->
                         val stableIndex = firstChunkIndex + index
                         val request = elevenLabsRequest(allChunks, stableIndex, voiceId, model)
-                        val existing = elevenLabsCache.get(request)
-                        val cached = existing ?: elevenLabsCache.put(
-                            request,
-                            elevenLabsClient.generate(apiKey, request),
-                        ).also {
-                            elevenLabsCacheStatus.update { status ->
-                                status.copy(
-                                    cachedPassages = (status.cachedPassages + 1)
-                                        .coerceAtMost(status.totalPassages),
-                                    storedBytes = elevenLabsCache.sizeBytes(),
-                                )
+                        val wasCached = elevenLabsCache.contains(request)
+                        val cached = elevenLabsCache.getOrGenerate(request) {
+                            elevenLabsClient.generate(apiKey, request)
+                        }.also {
+                            if (!wasCached) {
+                                elevenLabsCacheStatus.update { status ->
+                                    status.copy(
+                                        cachedPassages = (status.cachedPassages + 1)
+                                            .coerceAtMost(status.totalPassages),
+                                        storedBytes = elevenLabsCache.sizeBytes(),
+                                    )
+                                }
                             }
                         }
                         channel.send(
@@ -840,7 +872,7 @@ class ReaderViewModel(
                         return@launch
                     }
                 }
-                withContext(Dispatchers.Main) { stopTts() }
+                onNarrationChapterComplete()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1062,15 +1094,17 @@ class ReaderViewModel(
         if (KokoroVoicePack.isInstalled(app)) {
             // Speak a short sample in the newly chosen voice.
             kokoroJob?.cancel()
+            kokoro?.cancel()
             kokoroJob = viewModelScope.launch(Dispatchers.Default) {
                 val engine = kokoro ?: try {
                     KokoroEngine(KokoroVoicePack.modelDir(app)).also { kokoro = it }
                 } catch (e: Exception) {
                     return@launch
                 }
-                engine.resetCancel()
-                engine.synthesize("The interface disappears, and only the book remains.", sid, ttsSpeed.value)
-                    ?.let { engine.playBlocking(it) }
+                val session = engine.beginSession()
+                engine.synthesize(
+                    "The interface disappears, and only the book remains.", sid, ttsSpeed.value, session,
+                )?.let { engine.playBlocking(it, session) }
             }
         }
     }
@@ -1219,6 +1253,25 @@ class ReaderViewModel(
         }
     }
 
+    /** Continues into the next readable chapter unless the chapter timer was selected. */
+    private suspend fun onNarrationChapterComplete() {
+        if (ttsSleep.value == TtsSleep.END_OF_CHAPTER) {
+            withContext(Dispatchers.Main) { stopTts() }
+            return
+        }
+        val target = peekTurnTarget(forward = true)
+        if (target == null) {
+            withContext(Dispatchers.Main) { stopTts() }
+            return
+        }
+        withContext(Dispatchers.Main) {
+            ttsRange.value = null
+            ttsResumeOffset = null
+            commitTurn(target, forward = true)
+            startTts()
+        }
+    }
+
     private fun beginSpeaking(fromOffset: Int) {
         val text = chapterText(_ui.value.chapterIndex) ?: return
         val start = fromOffset.coerceIn(0, text.length)
@@ -1272,8 +1325,7 @@ class ReaderViewModel(
                     if (ttsChunkIndex < ttsChunks.size) {
                         speakChunk(ttsChunkIndex)
                     } else {
-                        // End of chapter: honor sleep=chapter, else stop cleanly.
-                        stopTts()
+                        onNarrationChapterComplete()
                     }
                 }
             }
@@ -1295,38 +1347,25 @@ class ReaderViewModel(
         elevenLabsJob?.cancel()
         elevenLabsPlayback.cancel()
         // Record the sitting for insights — but only real ones (30s+).
-        val elapsed = System.currentTimeMillis() - sessionStartedAt
-        if (elapsed >= 30_000) {
-            runBlocking {
-                app.sessionDao.insert(
-                    ReadingSessionEntity(
-                        uuid = UUID.randomUUID().toString(),
-                        bookUuid = bookUuid,
-                        startedAt = sessionStartedAt,
-                        endedAt = sessionStartedAt + elapsed,
-                        msRead = elapsed,
-                        pagesTurned = pagesTurned,
-                    ),
-                )
-            }
-        }
-        // Final synchronous save so a swipe-away never loses the reading position.
+        val session = readingSession.finish(bookUuid, pagesTurned)
         val state = _ui.value
         val page = currentPage()
         val opened = epub
-        if (page != null && opened != null) {
+        val position = if (page != null && opened != null) {
             val total = paginatedCache[state.chapterIndex]?.totalChars ?: 0
-            runBlocking {
-                app.bookDao.upsertPosition(
-                    ReadingPositionEntity(
-                        bookUuid = bookUuid,
-                        chapterIndex = state.chapterIndex,
-                        chapterHref = opened.chapterHref(state.chapterIndex),
-                        charOffset = page.startChar,
-                        progression = if (total > 0) page.startChar.toDouble() / total else 0.0,
-                        updatedAt = System.currentTimeMillis(),
-                    ),
-                )
+            ReadingPositionEntity(
+                bookUuid = bookUuid,
+                chapterIndex = state.chapterIndex,
+                chapterHref = opened.chapterHref(state.chapterIndex),
+                charOffset = page.startChar,
+                progression = overallProgression(state, page.startChar, total),
+                updatedAt = System.currentTimeMillis(),
+            )
+        } else null
+        if (session != null || position != null) {
+            app.appScope.launch(Dispatchers.IO) {
+                session?.let { app.sessionDao.upsert(it) }
+                position?.let { app.bookDao.upsertPosition(it) }
             }
         }
         epub?.close()

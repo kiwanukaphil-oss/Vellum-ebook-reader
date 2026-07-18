@@ -1,0 +1,1159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Vellum — Library organization concept</title>
+  <style>
+    @font-face {
+      font-family: "Fraunces";
+      src: url("vellum/app/src/main/res/font/fraunces.ttf") format("truetype");
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "Literata";
+      src: url("vellum/app/src/main/res/font/literata.ttf") format("truetype");
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "Plex Mono";
+      src: url("vellum/app/src/main/res/font/ibmplexmono.ttf") format("truetype");
+      font-display: swap;
+    }
+
+    :root {
+      --ink: #232326;
+      --muted: #68676d;
+      --faint: #96949a;
+      --linen: #fcfcfb;
+      --paper: #fffefb;
+      --soft: #f4f4f2;
+      --line: #e7e5e0;
+      --blue: #1f3a5f;
+      --blue-soft: #dce6f0;
+      --rust: #ad5636;
+      --rust-soft: #f6e4da;
+      --gold: #a7813f;
+      --gold-soft: #f2e9d2;
+      --green: #48655a;
+      --green-soft: #dfe9e4;
+      --shadow: 0 18px 50px rgba(35, 35, 38, .12);
+      --nav-h: 78px;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: #e9e8e4; color: var(--ink); }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 18% 8%, rgba(255,255,255,.85), transparent 28%),
+        #e9e8e4;
+      font-family: "Literata", Georgia, serif;
+    }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(31,58,95,.28);
+      outline-offset: 3px;
+    }
+
+    .stage {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      justify-content: center;
+      max-width: 470px;
+      margin: 0 auto;
+    }
+    .phone {
+      position: relative;
+      min-height: 100vh;
+      background: var(--linen);
+      overflow: hidden;
+      isolation: isolate;
+    }
+    .screen {
+      min-height: 100vh;
+      padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom));
+    }
+
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 76px;
+      padding: 14px 18px 10px;
+      background: color-mix(in srgb, var(--linen) 94%, transparent);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid rgba(231,229,224,.7);
+    }
+    .brand {
+      margin: 0 auto 0 0;
+      font: 650 30px/1 "Fraunces", Georgia, serif;
+      letter-spacing: -.6px;
+    }
+    .icon-button {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      cursor: pointer;
+    }
+    .icon-button:hover { background: var(--soft); }
+    .icon-button svg { width: 22px; height: 22px; stroke-width: 1.8; }
+
+    .library-tabs {
+      position: sticky;
+      z-index: 18;
+      top: 76px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      padding: 0 16px;
+      background: color-mix(in srgb, var(--linen) 96%, transparent);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--line);
+    }
+    .tab {
+      min-height: 44px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      font: 500 11px/1 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .tab.active { color: var(--blue); border-color: var(--blue); }
+
+    main { padding: 22px 18px 34px; }
+    .eyebrow {
+      color: var(--rust);
+      font: 500 10px/1.35 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+    }
+    .page-title {
+      margin: 6px 0 6px;
+      font: 620 34px/1.08 "Fraunces", Georgia, serif;
+      letter-spacing: -.65px;
+    }
+    .lede {
+      max-width: 38ch;
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 14px;
+      margin: 30px 0 13px;
+    }
+    .section-title {
+      margin: 0;
+      font: 610 21px/1.12 "Fraunces", Georgia, serif;
+    }
+    .section-note {
+      color: var(--faint);
+      font: 10px/1.3 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .5px;
+    }
+    .text-button {
+      border: 0;
+      background: transparent;
+      color: var(--blue);
+      padding: 7px 0;
+      font: 500 10px/1 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .continue-card {
+      display: grid;
+      grid-template-columns: 78px 1fr;
+      gap: 15px;
+      margin-top: 22px;
+      padding: 13px;
+      border: 1px solid #dfddd7;
+      border-radius: 17px;
+      background: var(--paper);
+      box-shadow: 0 8px 24px rgba(35,35,38,.055);
+      cursor: pointer;
+    }
+    .cover.continue-cover { width: 78px; height: 112px; aspect-ratio: auto; }
+    .continue-copy { min-width: 0; padding: 5px 5px 2px 0; }
+    .continue-copy h3 {
+      margin: 7px 0 4px;
+      font: 600 20px/1.16 "Fraunces", Georgia, serif;
+    }
+    .continue-copy p { margin: 0; color: var(--muted); font-size: 11px; }
+    .progress-track {
+      display: block;
+      height: 3px;
+      margin: 18px 0 8px;
+      overflow: hidden;
+      border-radius: 3px;
+      background: #e5e3de;
+    }
+    .progress-track span { display: block; width: 34%; height: 100%; background: var(--rust); }
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+      font: 9px/1.2 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .4px;
+    }
+
+    .category-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 11px;
+    }
+    .category-card {
+      display: block;
+      min-height: 155px;
+      position: relative;
+      overflow: hidden;
+      padding: 15px;
+      border: 1px solid rgba(35,35,38,.08);
+      border-radius: 16px;
+      text-align: left;
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .category-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(35,35,38,.09); }
+    .category-card.fiction { background: #e5edf3; }
+    .category-card.nonfiction { background: #eee7d9; }
+    .category-card.comics { background: #e5ece7; }
+    .category-card.essays { background: #f2e6df; }
+    .category-card h3 {
+      position: absolute;
+      z-index: 2;
+      top: 15px;
+      right: 15px;
+      left: 15px;
+      margin: 0;
+      font: 600 19px/1.1 "Fraunces", Georgia, serif;
+    }
+    .category-card .count {
+      position: absolute;
+      z-index: 2;
+      top: 43px;
+      left: 15px;
+      display: block;
+      color: var(--muted);
+      font: 9px/1.2 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .55px;
+      text-transform: uppercase;
+    }
+    .mini-shelf {
+      position: absolute;
+      right: 10px;
+      bottom: 14px;
+      left: 15px;
+      height: 70px;
+      display: flex;
+      align-items: end;
+      gap: 5px;
+      border-bottom: 2px solid rgba(35,35,38,.26);
+    }
+    .mini-book {
+      width: 18px;
+      height: var(--h, 52px);
+      border-radius: 2px 3px 1px 1px;
+      background: var(--c, var(--blue));
+      box-shadow: inset 2px 0 rgba(255,255,255,.25), 2px 2px 2px rgba(35,35,38,.1);
+      transform: rotate(var(--r, 0deg));
+      transform-origin: bottom;
+    }
+
+    .genre-rail {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      margin: 0 -18px;
+      padding: 1px 18px 9px;
+      scrollbar-width: none;
+    }
+    .genre-rail::-webkit-scrollbar { display: none; }
+    .genre-chip, .filter-chip {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--paper);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .genre-chip span, .filter-chip small {
+      color: var(--faint);
+      font: 9px/1 "Plex Mono", ui-monospace, monospace;
+    }
+    .genre-chip.active, .filter-chip.active {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+    .genre-chip.active span, .filter-chip.active small { color: #dce6f0; }
+
+    .book-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 19px 13px;
+    }
+    .book-card {
+      min-width: 0;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .cover {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 2 / 3;
+      overflow: hidden;
+      border-radius: 2px 7px 7px 2px;
+      background: var(--cover, #62515a);
+      box-shadow: inset 5px 0 rgba(0,0,0,.13), 0 8px 15px rgba(35,35,38,.16);
+      color: var(--cover-ink, #fff8eb);
+      isolation: isolate;
+      transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .book-card:hover .cover { transform: translateY(-3px); box-shadow: inset 5px 0 rgba(0,0,0,.13), 0 12px 19px rgba(35,35,38,.2); }
+    .cover::before {
+      content: "";
+      position: absolute;
+      inset: 8px;
+      border: 1px solid color-mix(in srgb, currentColor 38%, transparent);
+      border-radius: 1px 4px 4px 1px;
+      z-index: -1;
+    }
+    .cover.pattern-lines::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      opacity: .18;
+      background: repeating-linear-gradient(125deg, transparent 0 11px, currentColor 12px 13px);
+    }
+    .cover.pattern-sun::after {
+      content: "";
+      position: absolute;
+      z-index: -2;
+      width: 105px;
+      height: 105px;
+      left: 50%;
+      top: 26%;
+      translate: -50% -50%;
+      border-radius: 50%;
+      border: 1px solid currentColor;
+      box-shadow: 0 0 0 10px color-mix(in srgb, currentColor 10%, transparent), 0 0 0 22px color-mix(in srgb, currentColor 6%, transparent);
+      opacity: .55;
+    }
+    .cover.pattern-blocks::after {
+      content: "";
+      position: absolute;
+      inset: auto -10px 16px 18px;
+      height: 42%;
+      z-index: -2;
+      opacity: .20;
+      background: repeating-linear-gradient(90deg, currentColor 0 18px, transparent 18px 29px);
+      transform: skewY(-10deg);
+    }
+    .cover-title {
+      display: block;
+      padding: 19px 14px 0;
+      font: 600 clamp(12px, 3.6vw, 17px)/1.08 "Fraunces", Georgia, serif;
+      text-wrap: balance;
+    }
+    .cover-author {
+      position: absolute;
+      right: 12px;
+      bottom: 18px;
+      left: 13px;
+      font: 500 7px/1.25 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .7px;
+      text-transform: uppercase;
+    }
+    .book-title {
+      display: -webkit-box;
+      margin-top: 9px;
+      overflow: hidden;
+      font: 580 13px/1.25 "Fraunces", Georgia, serif;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .book-author {
+      display: block;
+      margin-top: 4px;
+      overflow: hidden;
+      color: var(--muted);
+      font: 8px/1.3 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .45px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .group-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 19px 0 15px;
+    }
+    .group-control {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 13px;
+      border: 1px solid #d9d7d1;
+      border-radius: 10px;
+      background: var(--paper);
+      color: var(--blue);
+      cursor: pointer;
+      font: 500 10px/1 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .35px;
+    }
+    .book-count {
+      margin-left: auto;
+      color: var(--faint);
+      font: 9px/1 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .45px;
+    }
+    .active-filter-row {
+      display: flex;
+      gap: 7px;
+      overflow-x: auto;
+      margin: 0 -18px 18px;
+      padding: 0 18px 2px;
+      scrollbar-width: none;
+    }
+    .filter-chip { min-height: 34px; padding: 0 11px; }
+    .filter-chip .x { font: 14px/1 sans-serif; opacity: .62; }
+
+    .group-section { margin-top: 24px; }
+    .group-heading {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 0 0 13px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+    .group-heading h2 { margin: 0; font: 610 21px/1 "Fraunces", Georgia, serif; }
+    .group-heading span { color: var(--faint); font: 9px/1 "Plex Mono", ui-monospace, monospace; }
+
+    .collection-stack {
+      display: grid;
+      gap: 11px;
+      margin-top: 21px;
+    }
+    .collection-card {
+      display: grid;
+      grid-template-columns: 106px 1fr 20px;
+      align-items: center;
+      gap: 14px;
+      min-height: 108px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--paper);
+      text-align: left;
+      cursor: pointer;
+    }
+    .cover-stack { position: relative; height: 80px; }
+    .stack-book {
+      position: absolute;
+      top: 0;
+      width: 54px;
+      height: 78px;
+      border-radius: 2px 5px 5px 2px;
+      background: var(--c);
+      box-shadow: inset 3px 0 rgba(0,0,0,.12), 0 5px 10px rgba(35,35,38,.18);
+    }
+    .stack-book:nth-child(1) { left: 0; transform: rotate(-5deg); }
+    .stack-book:nth-child(2) { left: 25px; transform: rotate(1deg); }
+    .stack-book:nth-child(3) { left: 50px; transform: rotate(6deg); }
+    .collection-card h3 { margin: 0 0 5px; font: 600 17px/1.2 "Fraunces", Georgia, serif; }
+    .collection-card p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .collection-card .meta { margin-top: 9px; color: var(--faint); font: 8px/1 "Plex Mono", monospace; letter-spacing: .45px; }
+    .new-collection {
+      min-height: 82px;
+      border: 1px dashed #c8c5bd;
+      border-radius: 16px;
+      background: transparent;
+      color: var(--blue);
+      cursor: pointer;
+      font: 500 10px/1 "Plex Mono", monospace;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+    }
+
+    .bottom-nav {
+      position: fixed;
+      z-index: 25;
+      right: max(0px, calc((100vw - 470px) / 2));
+      bottom: 0;
+      left: max(0px, calc((100vw - 470px) / 2));
+      height: calc(var(--nav-h) + env(safe-area-inset-bottom));
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      padding: 7px 8px env(safe-area-inset-bottom);
+      border-top: 1px solid var(--line);
+      background: color-mix(in srgb, var(--linen) 96%, transparent);
+      backdrop-filter: blur(18px);
+    }
+    .nav-item {
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 4px;
+      border: 0;
+      border-radius: 14px;
+      background: transparent;
+      color: #5f6066;
+      cursor: pointer;
+      font: 8px/1 "Plex Mono", ui-monospace, monospace;
+      letter-spacing: .5px;
+    }
+    .nav-item svg { width: 23px; height: 23px; stroke-width: 1.7; }
+    .nav-item.active { color: var(--rust); background: var(--rust-soft); }
+
+    .scrim {
+      position: fixed;
+      z-index: 39;
+      inset: 0;
+      border: 0;
+      background: rgba(21,22,25,.35);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease;
+    }
+    .scrim.open { opacity: 1; pointer-events: auto; }
+    .sheet {
+      position: fixed;
+      z-index: 40;
+      right: max(0px, calc((100vw - 470px) / 2));
+      bottom: 0;
+      left: max(0px, calc((100vw - 470px) / 2));
+      max-height: min(82vh, 720px);
+      overflow: auto;
+      padding: 10px 21px calc(24px + env(safe-area-inset-bottom));
+      border-radius: 24px 24px 0 0;
+      background: var(--paper);
+      box-shadow: 0 -20px 50px rgba(35,35,38,.18);
+      transform: translateY(105%);
+      transition: transform .26s cubic-bezier(.2,.8,.2,1);
+      visibility: hidden;
+    }
+    .sheet.open { transform: translateY(0); visibility: visible; }
+    .handle { width: 38px; height: 4px; margin: 0 auto 20px; border-radius: 3px; background: #d5d3ce; }
+    .sheet h2 { margin: 0; font: 620 27px/1.12 "Fraunces", Georgia, serif; }
+    .sheet-intro { margin: 7px 0 20px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .option-list { display: grid; gap: 4px; }
+    .option {
+      min-height: 52px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      padding: 0 13px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .option:hover { background: var(--soft); }
+    .option.selected { border-color: #c7d4e1; background: #edf2f6; color: var(--blue); }
+    .option strong { font: 500 13px/1.2 "Literata", Georgia, serif; }
+    .option small { display: block; margin-top: 3px; color: var(--muted); font: 8px/1.3 "Plex Mono", monospace; }
+    .check { font: 18px/1 sans-serif; }
+
+    .detail-layout {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 16px;
+    }
+    .cover.detail-cover { width: 92px; aspect-ratio: 2 / 3; }
+    .detail-layout h2 { font-size: 24px; }
+    .detail-author { margin: 5px 0 13px; color: var(--muted); font-size: 12px; }
+    .path-label { color: var(--faint); font: 8px/1 "Plex Mono", monospace; letter-spacing: .5px; text-transform: uppercase; }
+    .category-path { margin-top: 6px; color: var(--blue); font-size: 11px; line-height: 1.45; }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .tag { padding: 6px 8px; border-radius: 7px; background: var(--soft); color: var(--muted); font: 8px/1 "Plex Mono", monospace; }
+    .sheet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 24px; }
+    .primary-action, .secondary-action {
+      min-height: 46px;
+      border-radius: 12px;
+      cursor: pointer;
+      font: 500 9px/1 "Plex Mono", monospace;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+    }
+    .primary-action { border: 0; background: var(--blue); color: #fff; }
+    .secondary-action { border: 1px solid #d6d4ce; background: transparent; color: var(--blue); }
+
+    .search-overlay {
+      position: fixed;
+      z-index: 45;
+      right: max(0px, calc((100vw - 470px) / 2));
+      left: max(0px, calc((100vw - 470px) / 2));
+      top: 0;
+      min-height: 100vh;
+      padding: 18px;
+      background: var(--linen);
+      transform: translateX(105%);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: transform .23s ease, opacity .18s ease;
+    }
+    .search-overlay.open { transform: translateX(0); opacity: 1; visibility: visible; pointer-events: auto; }
+    .search-row { display: grid; grid-template-columns: 42px 1fr; align-items: center; gap: 8px; }
+    .search-box {
+      width: 100%;
+      height: 46px;
+      padding: 0 15px;
+      border: 1px solid #cfcdc7;
+      border-radius: 13px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 13px;
+    }
+    .search-hint { margin: 30px 4px 12px; color: var(--faint); font: 9px/1 "Plex Mono", monospace; letter-spacing: .6px; text-transform: uppercase; }
+
+    .toast {
+      position: fixed;
+      z-index: 60;
+      left: 50%;
+      bottom: 96px;
+      max-width: 330px;
+      padding: 11px 15px;
+      border-radius: 10px;
+      background: #27272b;
+      color: #fff;
+      box-shadow: var(--shadow);
+      font-size: 11px;
+      line-height: 1.4;
+      opacity: 0;
+      transform: translate(-50%, 12px);
+      pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    .concept-panel { display: none; }
+
+    @media (min-width: 900px) {
+      .stage {
+        grid-template-columns: 470px minmax(330px, 430px);
+        gap: 42px;
+        max-width: none;
+        margin: 0;
+        padding: 34px;
+        align-items: start;
+      }
+      .phone {
+        min-height: calc(100vh - 68px);
+        max-height: calc(100vh - 68px);
+        border: 1px solid rgba(35,35,38,.10);
+        border-radius: 30px;
+        box-shadow: 0 28px 80px rgba(35,35,38,.18);
+        overflow-y: auto;
+      }
+      .screen { min-height: calc(100vh - 68px); }
+      .topbar { top: 0; }
+      .library-tabs { top: 76px; }
+      .bottom-nav, .sheet, .search-overlay {
+        position: fixed;
+        right: auto;
+        left: calc(50% - 471px);
+        width: 470px;
+      }
+      .bottom-nav { bottom: 34px; border-radius: 0 0 30px 30px; }
+      .sheet { bottom: 34px; border-radius: 24px 24px 30px 30px; }
+      .search-overlay { top: 34px; min-height: calc(100vh - 68px); border-radius: 30px; }
+      .concept-panel {
+        display: block;
+        position: sticky;
+        top: 40px;
+        padding: 16px 6px;
+      }
+      .concept-kicker { color: var(--rust); font: 500 10px/1 "Plex Mono", monospace; letter-spacing: 1.2px; text-transform: uppercase; }
+      .concept-panel h1 { max-width: 10ch; margin: 12px 0 14px; font: 640 46px/1.02 "Fraunces", Georgia, serif; letter-spacing: -1px; }
+      .concept-panel > p { max-width: 37ch; color: #56555a; font-size: 14px; line-height: 1.62; }
+      .principles { display: grid; gap: 13px; margin-top: 28px; }
+      .principle { display: grid; grid-template-columns: 32px 1fr; gap: 12px; padding-top: 13px; border-top: 1px solid rgba(35,35,38,.13); }
+      .principle-num { color: var(--rust); font: 10px/1.4 "Plex Mono", monospace; }
+      .principle strong { display: block; margin-bottom: 4px; font: 600 14px/1.25 "Fraunces", Georgia, serif; }
+      .principle span { color: #6d6b70; font-size: 11px; line-height: 1.45; }
+      .try-note { margin-top: 26px; padding: 14px; border-radius: 13px; background: rgba(255,255,255,.55); color: #55545a; font: 9px/1.55 "Plex Mono", monospace; }
+    }
+
+    @media (max-width: 360px) {
+      .book-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .cover-title { font-size: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="phone" id="phone">
+      <div class="screen">
+        <header class="topbar">
+          <h1 class="brand">Vellum</h1>
+          <button class="icon-button" id="searchButton" aria-label="Search library">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/></svg>
+          </button>
+          <button class="icon-button" id="organizeButton" aria-label="Organize and filter">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M7 14v6"/></svg>
+          </button>
+        </header>
+
+        <nav class="library-tabs" aria-label="Library views">
+          <button class="tab active" data-view="home">Browse</button>
+          <button class="tab" data-view="all">All books</button>
+          <button class="tab" data-view="collections">Collections</button>
+        </nav>
+
+        <main id="mainContent" aria-live="polite"></main>
+      </div>
+
+      <nav class="bottom-nav" aria-label="Main navigation">
+        <button class="nav-item active" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21.5zM20 5.5A2.5 2.5 0 0 0 17.5 3H13v16h4.5a2.5 2.5 0 0 1 2.5 2.5z"/></svg>
+          <span>Library</span>
+        </button>
+        <button class="nav-item" data-toast="Reading opens your most recent book">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 3v18M19 3v18M5 5c4-2 6 0 7 2 1-2 3-4 7-2M5 17c4-2 6 0 7 2 1-2 3-4 7-2"/></svg>
+          <span>Reading</span>
+        </button>
+        <button class="nav-item" data-toast="Notes remains a separate workspace">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 5h6v6H5zM13 5h6v6h-6zM5 13h6v6H5zM13 13h6v6h-6z"/></svg>
+          <span>Notes</span>
+        </button>
+        <button class="nav-item" data-toast="Insights remains unchanged">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/></svg>
+          <span>Insights</span>
+        </button>
+      </nav>
+
+      <button class="scrim" id="scrim" aria-label="Close dialog"></button>
+      <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"></section>
+
+      <section class="search-overlay" id="searchOverlay" aria-label="Search library">
+        <div class="search-row">
+          <button class="icon-button" id="closeSearch" aria-label="Close search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 5-7 7 7 7"/></svg>
+          </button>
+          <input class="search-box" id="searchInput" type="search" placeholder="Title, author, genre, collection…" autocomplete="off">
+        </div>
+        <div class="search-hint" id="searchCaption">Try “romance”, “science”, or “Austen”</div>
+        <div class="book-grid" id="searchResults"></div>
+      </section>
+
+      <div class="toast" id="toast" role="status"></div>
+    </div>
+
+    <aside class="concept-panel">
+      <div class="concept-kicker">Library concept · interactive</div>
+      <h1>A map, not a filing cabinet.</h1>
+      <p>Books are easy to find because the structure mirrors how people remember them: first by broad kind, then by genre, with personal collections kept as a separate layer.</p>
+      <div class="principles">
+        <div class="principle">
+          <div class="principle-num">01</div>
+          <div><strong>Categories are stable</strong><span>Each book has one primary home such as Fiction or Non-fiction, preventing duplicates and ambiguity.</span></div>
+        </div>
+        <div class="principle">
+          <div class="principle-num">02</div>
+          <div><strong>Genres can overlap</strong><span>A historical romance can appear under both Romance and Historical without making another copy.</span></div>
+        </div>
+        <div class="principle">
+          <div class="principle-num">03</div>
+          <div><strong>Collections stay personal</strong><span>“Holiday reading” and “Books to revisit” are yours; they are not confused with factual metadata.</span></div>
+        </div>
+        <div class="principle">
+          <div class="principle-num">04</div>
+          <div><strong>Grouping is only a lens</strong><span>Reorganize All books by category, genre, series, or author without changing the books themselves.</span></div>
+        </div>
+      </div>
+      <div class="try-note">TRY IT → Open Fiction, tap a genre, switch to All books and change “Group by”, open a cover, or search for a category.</div>
+    </aside>
+  </div>
+
+  <script>
+    const books = [
+      { id: 1, title: "Pride and Prejudice", author: "Jane Austen", category: "Fiction", genres: ["Romance", "Classics"], series: "Standalone", progress: 34, cover: "#394d45", ink: "#f6ead2", pattern: "pattern-lines" },
+      { id: 2, title: "The Left Hand of Darkness", author: "Ursula K. Le Guin", category: "Fiction", genres: ["Science Fiction", "Classics"], series: "Hainish Cycle", cover: "#294b68", ink: "#f4ead7", pattern: "pattern-sun" },
+      { id: 3, title: "Beloved", author: "Toni Morrison", category: "Fiction", genres: ["Literary", "Historical"], series: "Standalone", cover: "#6f3f32", ink: "#fff1da", pattern: "pattern-blocks" },
+      { id: 4, title: "The Name of the Rose", author: "Umberto Eco", category: "Fiction", genres: ["Mystery", "Historical"], series: "Standalone", cover: "#70623f", ink: "#fff4d6", pattern: "pattern-lines" },
+      { id: 5, title: "Jane Eyre", author: "Charlotte Brontë", category: "Fiction", genres: ["Romance", "Classics"], series: "Standalone", cover: "#683f4a", ink: "#f9e8dc", pattern: "pattern-sun" },
+      { id: 6, title: "Kindred", author: "Octavia E. Butler", category: "Fiction", genres: ["Science Fiction", "Historical"], series: "Standalone", cover: "#3e4e5e", ink: "#f4e7cc", pattern: "pattern-blocks" },
+      { id: 7, title: "A Brief History of Time", author: "Stephen Hawking", category: "Non-fiction", genres: ["Science", "Cosmology"], series: "Standalone", cover: "#243a55", ink: "#e8e3ce", pattern: "pattern-sun" },
+      { id: 8, title: "The Warmth of Other Suns", author: "Isabel Wilkerson", category: "Non-fiction", genres: ["History", "Society"], series: "Standalone", cover: "#9a643e", ink: "#fff2df", pattern: "pattern-lines" },
+      { id: 9, title: "Braiding Sweetgrass", author: "Robin Wall Kimmerer", category: "Non-fiction", genres: ["Nature", "Essays"], series: "Standalone", cover: "#46634f", ink: "#f4e8cf", pattern: "pattern-blocks" },
+      { id: 10, title: "The Art of Stillness", author: "Pico Iyer", category: "Essays & Poetry", genres: ["Essays", "Mindfulness"], series: "Standalone", cover: "#a15d43", ink: "#fff1dc", pattern: "pattern-sun" },
+      { id: 11, title: "Devotions", author: "Mary Oliver", category: "Essays & Poetry", genres: ["Poetry", "Nature"], series: "Standalone", cover: "#7a8069", ink: "#fff5df", pattern: "pattern-lines" },
+      { id: 12, title: "Saga · Volume One", author: "Brian K. Vaughan", category: "Comics & Manga", genres: ["Science Fiction", "Graphic Novel"], series: "Saga", cover: "#4e3151", ink: "#f7e6cf", pattern: "pattern-blocks" },
+      { id: 13, title: "Maus", author: "Art Spiegelman", category: "Comics & Manga", genres: ["History", "Graphic Memoir"], series: "Maus", cover: "#353538", ink: "#f4e6d2", pattern: "pattern-lines" },
+      { id: 14, title: "The Complete Persepolis", author: "Marjane Satrapi", category: "Comics & Manga", genres: ["Graphic Memoir", "History"], series: "Persepolis", cover: "#8a3d34", ink: "#fff4dc", pattern: "pattern-sun" },
+    ];
+
+    const categories = [
+      { name: "Fiction", className: "fiction", colors: ["#294b68", "#6f3f32", "#70623f", "#683f4a"] },
+      { name: "Non-fiction", className: "nonfiction", colors: ["#243a55", "#9a643e", "#46634f", "#756b51"] },
+      { name: "Comics & Manga", className: "comics", colors: ["#4e3151", "#353538", "#8a3d34", "#46634f"] },
+      { name: "Essays & Poetry", className: "essays", colors: ["#a15d43", "#7a8069", "#53677b", "#83665d"] },
+    ];
+
+    const collections = [
+      { name: "Quiet Sunday", description: "Reflective books for slow mornings.", ids: [9, 10, 11], colors: ["#46634f", "#a15d43", "#7a8069"] },
+      { name: "Books to revisit", description: "The ones that changed how I think.", ids: [2, 3, 7], colors: ["#294b68", "#6f3f32", "#243a55"] },
+      { name: "Holiday reading", description: "A deliberately light, portable stack.", ids: [1, 5, 12], colors: ["#394d45", "#683f4a", "#4e3151"] },
+    ];
+
+    const state = {
+      view: "home",
+      category: null,
+      genre: null,
+      groupBy: "Category",
+      onlyUnread: false,
+    };
+
+    const main = document.getElementById("mainContent");
+    const sheet = document.getElementById("sheet");
+    const scrim = document.getElementById("scrim");
+    const searchOverlay = document.getElementById("searchOverlay");
+    const searchInput = document.getElementById("searchInput");
+    const searchResults = document.getElementById("searchResults");
+    const toast = document.getElementById("toast");
+    let toastTimer;
+
+    function countForCategory(name) {
+      return books.filter(book => book.category === name).length;
+    }
+
+    function coverMarkup(book, extraClass = "") {
+      return `<div class="cover ${book.pattern} ${extraClass}" style="--cover:${book.cover};--cover-ink:${book.ink}">
+        <span class="cover-title">${book.title}</span>
+        <span class="cover-author">${book.author}</span>
+      </div>`;
+    }
+
+    function bookMarkup(book) {
+      return `<button class="book-card" data-book="${book.id}" aria-label="Open details for ${book.title}">
+        ${coverMarkup(book)}
+        <span class="book-title">${book.title}</span>
+        <span class="book-author">${book.author}</span>
+      </button>`;
+    }
+
+    function miniShelfMarkup(category) {
+      const heights = [49, 61, 55, 67];
+      const rotations = ["0deg", "-2deg", "0deg", "3deg"];
+      return `<div class="mini-shelf">${category.colors.map((color, index) =>
+        `<span class="mini-book" style="--c:${color};--h:${heights[index]}px;--r:${rotations[index]}"></span>`
+      ).join("")}</div>`;
+    }
+
+    function renderHome() {
+      const genres = ["Romance", "Mystery", "History", "Science Fiction", "Nature"];
+      main.innerHTML = `
+        <div class="eyebrow">Your personal library · ${books.length} books</div>
+        <h2 class="page-title">Find the right book.</h2>
+        <p class="lede">Browse by what a book is, then narrow by genre. Personal collections remain separate and entirely yours.</p>
+
+        <button class="continue-card" data-book="1">
+          ${coverMarkup(books[0], "continue-cover")}
+          <span class="continue-copy">
+            <span class="eyebrow">Continue reading</span>
+            <h3>Pride and Prejudice</h3>
+            <p>Chapter 12 · about 4h 18m left</p>
+            <span class="progress-track"><span></span></span>
+            <span class="progress-meta"><span>34% read</span><span>5 / 158</span></span>
+          </span>
+        </button>
+
+        <div class="section-head"><div><h2 class="section-title">Browse by category</h2><div class="section-note">One primary home per book</div></div></div>
+        <div class="category-grid">
+          ${categories.map(category => `<button class="category-card ${category.className}" data-category="${category.name}">
+            <h3>${category.name}</h3>
+            <span class="count">${countForCategory(category.name)} books</span>
+            ${miniShelfMarkup(category)}
+          </button>`).join("")}
+        </div>
+
+        <div class="section-head"><div><h2 class="section-title">Popular shelves</h2><div class="section-note">Genres can overlap</div></div><button class="text-button" data-go-all>See all</button></div>
+        <div class="genre-rail">
+          ${genres.map(genre => `<button class="genre-chip" data-genre="${genre}">${genre}<span>${books.filter(book => book.genres.includes(genre)).length}</span></button>`).join("")}
+        </div>
+
+        <div class="section-head"><h2 class="section-title">Recently added</h2><button class="text-button" data-go-all>All books</button></div>
+        <div class="book-grid">${books.slice(7, 13).map(bookMarkup).join("")}</div>`;
+    }
+
+    function filteredBooks() {
+      return books.filter(book =>
+        (!state.category || book.category === state.category) &&
+        (!state.genre || book.genres.includes(state.genre)) &&
+        (!state.onlyUnread || !book.progress)
+      );
+    }
+
+    function groupingValue(book) {
+      if (state.groupBy === "Category") return [book.category];
+      if (state.groupBy === "Genre") return book.genres;
+      if (state.groupBy === "Series") return [book.series];
+      if (state.groupBy === "Author") return [book.author.split(" ").slice(-1)[0]];
+      return ["All books"];
+    }
+
+    function groupedBooks(list) {
+      if (state.groupBy === "None") return [["All books", list]];
+      const groups = new Map();
+      list.forEach(book => groupingValue(book).forEach(key => {
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(book);
+      }));
+      const categoryOrder = categories.map(item => item.name);
+      return [...groups.entries()].sort(([a], [b]) => {
+        if (state.groupBy === "Category") return categoryOrder.indexOf(a) - categoryOrder.indexOf(b);
+        return a.localeCompare(b);
+      });
+    }
+
+    function renderAll() {
+      const list = filteredBooks();
+      const title = state.category || (state.genre ? state.genre : "All books");
+      const subtitle = state.category
+        ? `A primary category · ${list.length} books${state.genre ? ` · ${state.genre}` : ""}`
+        : state.genre
+          ? `A genre shelf across categories · ${list.length} books`
+          : "Every book, organized through the lens you choose.";
+      const groups = groupedBooks(list);
+      const allGenres = [...new Set(books.flatMap(book => book.genres))].sort();
+
+      main.innerHTML = `
+        <div class="eyebrow">${state.category ? "Category" : state.genre ? "Genre shelf" : "Library"}</div>
+        <h2 class="page-title">${title}</h2>
+        <p class="lede">${subtitle}</p>
+        <div class="group-toolbar">
+          <button class="group-control" id="groupButton">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M7 12h13M10 18h10"/></svg>
+            Group by · ${state.groupBy}
+          </button>
+          <span class="book-count">${list.length} result${list.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="active-filter-row">
+          ${state.category ? `<button class="filter-chip active" data-clear-category>${state.category}<span class="x">×</span></button>` : ""}
+          ${state.genre ? `<button class="filter-chip active" data-clear-genre>${state.genre}<span class="x">×</span></button>` : ""}
+          <button class="filter-chip ${state.onlyUnread ? "active" : ""}" data-unread>Unread only</button>
+          ${allGenres.slice(0, 6).filter(genre => genre !== state.genre).map(genre => `<button class="filter-chip" data-genre="${genre}">${genre}</button>`).join("")}
+        </div>
+        ${groups.length ? groups.map(([group, groupBooks]) => `<section class="group-section">
+          <div class="group-heading"><h2>${group}</h2><span>${groupBooks.length} book${groupBooks.length === 1 ? "" : "s"}</span></div>
+          <div class="book-grid">${groupBooks.map(bookMarkup).join("")}</div>
+        </section>`).join("") : `<div class="section-head"><p class="lede">No books match these filters.</p></div>`}`;
+    }
+
+    function renderCollections() {
+      main.innerHTML = `
+        <div class="eyebrow">Personal layer</div>
+        <h2 class="page-title">Your collections.</h2>
+        <p class="lede">Collections are intentional stacks you create. They never compete with categories or genres, and a book can belong to as many as you like.</p>
+        <div class="collection-stack">
+          ${collections.map(collection => `<button class="collection-card" data-collection="${collection.name}">
+            <span class="cover-stack">${collection.colors.map(color => `<i class="stack-book" style="--c:${color}"></i>`).join("")}</span>
+            <span><h3>${collection.name}</h3><p>${collection.description}</p><span class="meta">${collection.ids.length} books · manual collection</span></span>
+            <span aria-hidden="true">›</span>
+          </button>`).join("")}
+          <button class="new-collection" id="newCollection">＋ New collection</button>
+        </div>`;
+    }
+
+    function render() {
+      document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === state.view));
+      if (state.view === "home") renderHome();
+      if (state.view === "all") renderAll();
+      if (state.view === "collections") renderCollections();
+      bindDynamicEvents();
+      document.getElementById("phone").scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function bindDynamicEvents() {
+      document.querySelectorAll("[data-category]").forEach(button => button.addEventListener("click", () => {
+        state.category = button.dataset.category;
+        state.genre = null;
+        state.groupBy = "Genre";
+        state.view = "all";
+        render();
+      }));
+      document.querySelectorAll("[data-genre]").forEach(button => button.addEventListener("click", () => {
+        state.genre = button.dataset.genre;
+        if (state.view === "home") state.category = null;
+        state.view = "all";
+        state.groupBy = state.category ? "None" : "Category";
+        render();
+      }));
+      document.querySelectorAll("[data-book]").forEach(button => button.addEventListener("click", () => openBook(Number(button.dataset.book))));
+      document.querySelectorAll("[data-go-all]").forEach(button => button.addEventListener("click", () => {
+        state.view = "all";
+        state.category = null;
+        state.genre = null;
+        state.groupBy = "Category";
+        render();
+      }));
+      document.querySelector("[data-clear-category]")?.addEventListener("click", () => { state.category = null; render(); });
+      document.querySelector("[data-clear-genre]")?.addEventListener("click", () => { state.genre = null; render(); });
+      document.querySelector("[data-unread]")?.addEventListener("click", () => { state.onlyUnread = !state.onlyUnread; render(); });
+      document.getElementById("groupButton")?.addEventListener("click", openGroupSheet);
+      document.querySelectorAll("[data-collection]").forEach(button => button.addEventListener("click", () => {
+        const collection = collections.find(item => item.name === button.dataset.collection);
+        showToast(`${collection.name} · ${collection.ids.length} books`);
+      }));
+      document.getElementById("newCollection")?.addEventListener("click", () => showToast("In the app, this opens a simple name-and-books sheet."));
+    }
+
+    function openSheet(content) {
+      sheet.innerHTML = `<div class="handle"></div>${content}`;
+      scrim.classList.add("open");
+      sheet.classList.add("open");
+      sheet.querySelector("button, input")?.focus({ preventScroll: true });
+    }
+
+    function closeSheet() {
+      sheet.classList.remove("open");
+      scrim.classList.remove("open");
+    }
+
+    function openGroupSheet() {
+      const options = [
+        ["Category", "Fiction, Non-fiction, Comics…"],
+        ["Genre", "Romance, History, Science…"],
+        ["Series", "Keep volumes together"],
+        ["Author", "Alphabetical by surname"],
+        ["None", "One uninterrupted grid"],
+      ];
+      openSheet(`
+        <h2 id="sheetTitle">Group your library</h2>
+        <p class="sheet-intro">Grouping changes only this view. It never moves, duplicates, or edits a book.</p>
+        <div class="option-list">
+          ${options.map(([name, note]) => `<button class="option ${state.groupBy === name ? "selected" : ""}" data-group="${name}">
+            <span><strong>${name}</strong><small>${note}</small></span><span class="check">${state.groupBy === name ? "✓" : ""}</span>
+          </button>`).join("")}
+        </div>`);
+      sheet.querySelectorAll("[data-group]").forEach(button => button.addEventListener("click", () => {
+        state.groupBy = button.dataset.group;
+        closeSheet();
+        render();
+      }));
+    }
+
+    function openOrganizeSheet() {
+      openSheet(`
+        <h2 id="sheetTitle">Organize this view</h2>
+        <p class="sheet-intro">Filter what you see, or choose how the current results are arranged.</p>
+        <div class="option-list">
+          <button class="option" id="sheetGroup"><span><strong>Group books</strong><small>Category, genre, series, author, or none</small></span><span>›</span></button>
+          <button class="option" id="sheetUnread"><span><strong>Unread only</strong><small>${state.onlyUnread ? "Currently on" : "Currently off"}</small></span><span class="check">${state.onlyUnread ? "✓" : ""}</span></button>
+          <button class="option" data-toast-sheet="Sort options would live here"><span><strong>Sort within groups</strong><small>Recent, title, author, progress</small></span><span>›</span></button>
+          <button class="option" data-toast-sheet="Metadata review would show books missing a category"><span><strong>Books needing a category</strong><small>A quiet inbox for newly imported books</small></span><span>2</span></button>
+        </div>`);
+      document.getElementById("sheetGroup").addEventListener("click", openGroupSheet);
+      document.getElementById("sheetUnread").addEventListener("click", () => { state.onlyUnread = !state.onlyUnread; closeSheet(); if (state.view !== "all") state.view = "all"; render(); });
+      sheet.querySelectorAll("[data-toast-sheet]").forEach(button => button.addEventListener("click", () => showToast(button.dataset.toastSheet)));
+    }
+
+    function openBook(id) {
+      const book = books.find(item => item.id === id);
+      openSheet(`
+        <div class="detail-layout">
+          ${coverMarkup(book, "detail-cover")}
+          <div>
+            <h2 id="sheetTitle">${book.title}</h2>
+            <p class="detail-author">${book.author}</p>
+            <div class="path-label">Primary home</div>
+            <div class="category-path">${book.category} <span aria-hidden="true">›</span> ${book.genres[0]}</div>
+            <div class="tag-row">${book.genres.map(genre => `<span class="tag">${genre}</span>`).join("")}</div>
+          </div>
+        </div>
+        <div class="sheet-actions">
+          <button class="secondary-action" id="editClassification">Edit category</button>
+          <button class="primary-action" id="openReading">Open book</button>
+        </div>`);
+      document.getElementById("editClassification").addEventListener("click", () => showToast("One primary category, multiple genres, and optional collections."));
+      document.getElementById("openReading").addEventListener("click", () => { closeSheet(); showToast("The reader would open here."); });
+    }
+
+    function renderSearch(query = "") {
+      const term = query.trim().toLowerCase();
+      const results = term.length < 2 ? [] : books.filter(book =>
+        [book.title, book.author, book.category, ...book.genres].join(" ").toLowerCase().includes(term)
+      );
+      document.getElementById("searchCaption").textContent = term.length < 2
+        ? "Try “romance”, “science”, or “Austen”"
+        : `${results.length} match${results.length === 1 ? "" : "es"} across titles and organization`;
+      searchResults.innerHTML = results.map(bookMarkup).join("");
+      searchResults.querySelectorAll("[data-book]").forEach(button => button.addEventListener("click", () => {
+        closeSearch();
+        setTimeout(() => openBook(Number(button.dataset.book)), 230);
+      }));
+    }
+
+    function openSearch() {
+      searchOverlay.classList.add("open");
+      searchInput.value = "";
+      renderSearch();
+      setTimeout(() => searchInput.focus(), 220);
+    }
+    function closeSearch() { searchOverlay.classList.remove("open"); }
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.classList.add("show");
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 2300);
+    }
+
+    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => {
+      state.view = tab.dataset.view;
+      if (state.view === "home") { state.category = null; state.genre = null; }
+      render();
+    }));
+    document.getElementById("searchButton").addEventListener("click", openSearch);
+    document.getElementById("closeSearch").addEventListener("click", closeSearch);
+    document.getElementById("organizeButton").addEventListener("click", openOrganizeSheet);
+    document.getElementById("scrim").addEventListener("click", closeSheet);
+    document.getElementById("searchInput").addEventListener("input", event => renderSearch(event.target.value));
+    document.querySelectorAll("[data-toast]").forEach(button => button.addEventListener("click", () => showToast(button.dataset.toast)));
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") {
+        if (searchOverlay.classList.contains("open")) closeSearch();
+        else closeSheet();
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

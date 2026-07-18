@@ -4,7 +4,13 @@ import android.util.Base64
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URLEncoder
 import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withContext
 
 data class ElevenLabsVoice(
     val id: String,
@@ -45,18 +51,25 @@ class ElevenLabsApiException(
 /** Small dependency-free client for the exact ElevenLabs surfaces Vellum uses. */
 class ElevenLabsClient {
 
-    fun getVoices(apiKey: String): List<ElevenLabsVoice> {
-        val response = request(
-            method = "GET",
-            path = "/v2/voices?page_size=100&include_total_count=false",
-            apiKey = apiKey,
-        )
-        val voices = JSONObject(response).getJSONArray("voices")
-        return buildList {
+    suspend fun getVoices(apiKey: String): List<ElevenLabsVoice> {
+        val result = mutableListOf<ElevenLabsVoice>()
+        var nextPageToken: String? = null
+        do {
+            val token = nextPageToken?.let {
+                "&next_page_token=${URLEncoder.encode(it, Charsets.UTF_8.name())}"
+            }.orEmpty()
+            val root = JSONObject(
+                request(
+                    method = "GET",
+                    path = "/v2/voices?page_size=100&include_total_count=false$token",
+                    apiKey = apiKey,
+                ),
+            )
+            val voices = root.getJSONArray("voices")
             for (index in 0 until voices.length()) {
                 val voice = voices.getJSONObject(index)
                 val labels = voice.optJSONObject("labels") ?: JSONObject()
-                add(
+                result.add(
                     ElevenLabsVoice(
                         id = voice.getString("voice_id"),
                         name = voice.optString("name", "Unnamed voice"),
@@ -68,10 +81,14 @@ class ElevenLabsClient {
                     ),
                 )
             }
-        }.sortedBy { it.name.lowercase() }
+            nextPageToken = root.optString("next_page_token").takeIf {
+                root.optBoolean("has_more") && it.isNotBlank() && it != "null"
+            }
+        } while (nextPageToken != null)
+        return result.distinctBy { it.id }.sortedBy { it.name.lowercase() }
     }
 
-    fun getSubscription(apiKey: String): ElevenLabsSubscription {
+    suspend fun getSubscription(apiKey: String): ElevenLabsSubscription {
         val json = JSONObject(request("GET", "/v1/user/subscription", apiKey))
         return ElevenLabsSubscription(
             tier = json.optString("tier", "unknown"),
@@ -80,7 +97,7 @@ class ElevenLabsClient {
         )
     }
 
-    fun generate(apiKey: String, generation: ElevenLabsGenerationRequest): ElevenLabsGeneration {
+    suspend fun generate(apiKey: String, generation: ElevenLabsGenerationRequest): ElevenLabsGeneration {
         val voiceId = URI(null, null, generation.voiceId, null).rawPath
         val payload = JSONObject()
             .put("text", generation.text)
@@ -108,13 +125,16 @@ class ElevenLabsClient {
         )
     }
 
-    private fun request(
+    private suspend fun request(
         method: String,
         path: String,
         apiKey: String,
         body: String? = null,
-    ): String {
+    ): String = withContext(Dispatchers.IO) {
         val connection = URL("$BASE_URL$path").openConnection() as HttpURLConnection
+        val cancellation = currentCoroutineContext().job.invokeOnCompletion { cause ->
+            if (cause != null) connection.disconnect()
+        }
         try {
             connection.requestMethod = method
             connection.connectTimeout = 15_000
@@ -132,8 +152,10 @@ class ElevenLabsClient {
                 ?.use { it.readText() }
                 .orEmpty()
             if (status !in 200..299) throw ElevenLabsApiException(status, errorMessage(response, status))
-            return response
+            currentCoroutineContext().ensureActive()
+            response
         } finally {
+            cancellation.dispose()
             connection.disconnect()
         }
     }

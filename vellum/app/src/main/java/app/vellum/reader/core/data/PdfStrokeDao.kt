@@ -15,6 +15,9 @@ interface PdfStrokeDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(stroke: PdfStrokeEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(strokes: List<PdfStrokeEntity>)
+
     @Query("SELECT * FROM pdf_strokes WHERE bookUuid = :bookUuid AND pageIndex = :pageIndex AND deletedAt IS NULL ORDER BY createdAt DESC LIMIT 1")
     suspend fun latestForPage(bookUuid: String, pageIndex: Int): PdfStrokeEntity?
 
@@ -26,4 +29,7 @@ interface PdfStrokeDao {
 
     @Query("SELECT * FROM pdf_strokes")
     suspend fun allRaw(): List<PdfStrokeEntity>
+
+    @Query("DELETE FROM pdf_strokes WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeTombstones(cutoff: Long)
 }

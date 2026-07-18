@@ -27,6 +27,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -65,13 +66,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleImportIntent(intent)
+    }
+
     /** "Open with Vellum" (VIEW) and share-to-Vellum (SEND) EPUB imports. */
     private fun handleImportIntent(intent: Intent?) {
         val uri: Uri? = when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data
-            Intent.ACTION_SEND ->
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+            Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
             else -> null
         }
         if (uri != null) {
@@ -204,11 +209,20 @@ private fun VellumNavHost() {
                 route = "search?bookUuid={bookUuid}",
                 arguments = listOf(navArgument("bookUuid") { type = NavType.StringType; nullable = true; defaultValue = null }),
             ) { entry ->
+                val scopeBookUuid = entry.arguments?.getString("bookUuid")
                 SearchScreen(
-                    scopeBookUuid = entry.arguments?.getString("bookUuid"),
+                    scopeBookUuid = scopeBookUuid,
                     onOpenBook = { uuid, format -> navController.navigate(readerRouteFor(format, uuid)) },
                     onOpenPassage = { uuid, chapter, offset ->
-                        navController.navigate("reader/$uuid?chapter=$chapter&offset=$offset")
+                        if (scopeBookUuid != null) {
+                            // Return to the existing reader instead of stacking a
+                            // second reader ViewModel/session for the same book.
+                            navController.previousBackStackEntry?.savedStateHandle
+                                ?.set("passageJump", "$chapter:$offset")
+                            navController.popBackStack()
+                        } else {
+                            navController.navigate("reader/$uuid?chapter=$chapter&offset=$offset")
+                        }
                     },
                     onBack = { navController.popBackStack() },
                 )
@@ -222,11 +236,16 @@ private fun VellumNavHost() {
                 ),
             ) { entry ->
                 val bookUuid = entry.arguments?.getString("bookUuid") ?: return@composable
+                val passageJump by entry.savedStateHandle
+                    .getStateFlow("passageJump", "")
+                    .collectAsState()
                 ProvideNavAnimation {
                     ReaderScreen(
                         bookUuid = bookUuid,
                         initialChapter = entry.arguments?.getInt("chapter") ?: -1,
                         initialOffset = entry.arguments?.getInt("offset") ?: -1,
+                        passageJump = passageJump,
+                        onPassageJumpConsumed = { entry.savedStateHandle["passageJump"] = "" },
                         onBack = { navController.popBackStack() },
                         onSearchInBook = { uuid -> navController.navigate("search?bookUuid=$uuid") },
                     )

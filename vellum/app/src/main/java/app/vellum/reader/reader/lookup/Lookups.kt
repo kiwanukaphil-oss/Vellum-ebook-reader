@@ -1,5 +1,6 @@
 package app.vellum.reader.reader.lookup
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -34,6 +35,7 @@ object Lookups {
             }
             builder.toString().trim().ifBlank { null }
         } catch (e: Exception) {
+            Log.w(TAG, "Dictionary response could not be parsed", e)
             null
         }
     }
@@ -46,6 +48,7 @@ object Lookups {
             val extract = body.optString("extract")
             extract.ifBlank { null }
         } catch (e: Exception) {
+            Log.w(TAG, "Wikipedia response could not be parsed", e)
             null
         }
     }
@@ -67,6 +70,9 @@ object Lookups {
             connection.disconnect()
         }
     } catch (e: Exception) {
+        Log.w(TAG, "Lookup request failed", e)
         null
     }
+
+    private const val TAG = "VellumLookup"
 }

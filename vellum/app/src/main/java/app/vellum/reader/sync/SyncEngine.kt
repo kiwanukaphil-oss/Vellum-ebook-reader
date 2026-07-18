@@ -2,6 +2,7 @@ package app.vellum.reader.sync
 
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import androidx.room.withTransaction
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.AnnotationEntity
 import app.vellum.reader.core.data.BookCollectionCrossRef
@@ -40,11 +41,16 @@ class SyncEngine(private val app: VellumApp) {
         val dir = DocumentFile.fromTreeUri(app, folderUri)
             ?: return@withContext SyncResult(0, 0, "Sync folder is not accessible")
         try {
+            val now = System.currentTimeMillis()
+            val deviceId = app.settingsStore.syncDeviceId()
             val remote = readBundle(dir)
-            val merged = mergeAll(remote)
+            val merged = mergeAll(remote, deviceId, now)
             applyLocally(merged)
             val (pulled, pushed) = transferBookFiles(dir, merged.books)
-            writeBundle(dir, merged)
+            val cutoff = acknowledgedTombstoneCutoff(merged, now)
+            val compacted = compactTombstones(merged, cutoff)
+            writeBundle(dir, compacted)
+            if (cutoff != Long.MIN_VALUE) purgeLocalTombstones(cutoff)
             SyncResult(pulled, pushed)
         } catch (e: Exception) {
             SyncResult(0, 0, e.message ?: "Sync failed")
@@ -53,7 +59,7 @@ class SyncEngine(private val app: VellumApp) {
 
     // ---- Snapshot & merge -------------------------------------------------
 
-    private class Bundle(
+    private data class Bundle(
         val books: List<BookEntity>,
         val positions: List<ReadingPositionEntity>,
         val annotations: List<AnnotationEntity>,
@@ -64,6 +70,7 @@ class SyncEngine(private val app: VellumApp) {
         val panels: List<ComicPanelEntity>,
         val strokes: List<PdfStrokeEntity>,
         val sessions: List<ReadingSessionEntity>,
+        val deviceAcks: Map<String, Long> = emptyMap(),
     )
 
     private fun <T> mergeRows(local: List<T>, remote: List<T>, key: (T) -> String, updatedAt: (T) -> Long): List<T> {
@@ -71,45 +78,112 @@ class SyncEngine(private val app: VellumApp) {
         (local + remote).forEach { row ->
             val k = key(row)
             val existing = byKey[k]
-            if (existing == null || updatedAt(row) > updatedAt(existing)) byKey[k] = row
+            if (existing == null || updatedAt(row) > updatedAt(existing) ||
+                (updatedAt(row) == updatedAt(existing) && row.toString() > existing.toString())
+            ) {
+                byKey[k] = row
+            }
         }
         return byKey.values.toList()
     }
 
-    private suspend fun mergeAll(remote: Bundle): Bundle = Bundle(
-        books = mergeRows(app.bookDao.allRaw(), remote.books, { it.uuid }, { it.updatedAt }),
-        positions = mergeRows(app.bookDao.allPositionsRaw(), remote.positions, { it.bookUuid }, { it.updatedAt }),
-        annotations = mergeRows(app.annotationDao.allRaw(), remote.annotations, { it.uuid }, { it.updatedAt }),
-        collections = mergeRows(app.collectionDao.allCollectionsRaw(), remote.collections, { it.uuid }, { it.updatedAt }),
-        tags = mergeRows(app.collectionDao.allTagsRaw(), remote.tags, { it.uuid }, { it.updatedAt }),
-        bookCollections = mergeRows(
-            app.collectionDao.allBookCollectionsRaw(), remote.bookCollections,
-            { "${it.bookUuid}/${it.collectionUuid}" }, { it.updatedAt },
-        ),
-        bookTags = mergeRows(
-            app.collectionDao.allBookTagsRaw(), remote.bookTags,
-            { "${it.bookUuid}/${it.tagUuid}" }, { it.updatedAt },
-        ),
-        panels = mergeRows(app.comicPanelDao.allRaw(), remote.panels, { it.uuid }, { it.updatedAt }),
-        strokes = mergeRows(app.pdfStrokeDao.allRaw(), remote.strokes, { it.uuid }, { it.updatedAt }),
-        sessions = mergeRows(app.sessionDao.allRaw(), remote.sessions, { it.uuid }, { 0L }),
-    )
+    private suspend fun mergeAll(remote: Bundle, deviceId: String, now: Long): Bundle {
+        // A badly skewed peer clock must not create a row that wins every merge
+        // indefinitely. A small allowance covers normal clock drift.
+        val futureCeiling = now + MAX_CLOCK_SKEW_MS
+        val merged = Bundle(
+            books = mergeRows(app.bookDao.allRaw(), remote.books.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
+            positions = mergeRows(app.bookDao.allPositionsRaw(), remote.positions.filter { it.updatedAt <= futureCeiling }, { it.bookUuid }, { it.updatedAt }),
+            annotations = mergeRows(app.annotationDao.allRaw(), remote.annotations.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
+            collections = mergeRows(app.collectionDao.allCollectionsRaw(), remote.collections.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
+            tags = mergeRows(app.collectionDao.allTagsRaw(), remote.tags.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
+            bookCollections = mergeRows(
+                app.collectionDao.allBookCollectionsRaw(), remote.bookCollections.filter { it.updatedAt <= futureCeiling },
+                { "${it.bookUuid}/${it.collectionUuid}" }, { it.updatedAt },
+            ),
+            bookTags = mergeRows(
+                app.collectionDao.allBookTagsRaw(), remote.bookTags.filter { it.updatedAt <= futureCeiling },
+                { "${it.bookUuid}/${it.tagUuid}" }, { it.updatedAt },
+            ),
+            panels = mergeRows(app.comicPanelDao.allRaw(), remote.panels.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
+            strokes = mergeRows(app.pdfStrokeDao.allRaw(), remote.strokes.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
+            sessions = mergeRows(app.sessionDao.allRaw(), remote.sessions, { it.uuid }, { 0L }),
+            deviceAcks = remote.deviceAcks,
+        )
+        val latestTombstone = listOfNotNull(
+            merged.books.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.annotations.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.collections.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.tags.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.bookCollections.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.bookTags.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.panels.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.strokes.mapNotNull { it.deletedAt }.maxOrNull(),
+        ).maxOrNull() ?: Long.MIN_VALUE
+        val priorAck = remote.deviceAcks[deviceId]
+        val acks = if (priorAck == null || latestTombstone > priorAck) {
+            remote.deviceAcks + (deviceId to now)
+        } else remote.deviceAcks
+        return merged.copy(deviceAcks = acks)
+    }
+
+    private fun acknowledgedTombstoneCutoff(bundle: Bundle, now: Long): Long {
+        val oldestAcknowledgement = bundle.deviceAcks.values.minOrNull() ?: return Long.MIN_VALUE
+        return minOf(oldestAcknowledgement, now - TOMBSTONE_GRACE_MS)
+    }
+
+    private fun compactTombstones(bundle: Bundle, cutoff: Long): Bundle {
+        if (cutoff == Long.MIN_VALUE) return bundle
+        return bundle.copy(
+            books = bundle.books.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            annotations = bundle.annotations.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            collections = bundle.collections.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            tags = bundle.tags.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            bookCollections = bundle.bookCollections.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            bookTags = bundle.bookTags.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            panels = bundle.panels.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            strokes = bundle.strokes.filter { it.deletedAt == null || it.deletedAt > cutoff },
+        )
+    }
+
+    private suspend fun purgeLocalTombstones(cutoff: Long) {
+        app.database.withTransaction {
+            app.annotationDao.purgeTombstones(cutoff)
+            app.comicPanelDao.purgeTombstones(cutoff)
+            app.pdfStrokeDao.purgeTombstones(cutoff)
+            app.collectionDao.purgeBookCollectionTombstones(cutoff)
+            app.collectionDao.purgeBookTagTombstones(cutoff)
+            app.collectionDao.purgeCollectionTombstones(cutoff)
+            app.collectionDao.purgeTagTombstones(cutoff)
+            app.bookDao.purgeTombstones(cutoff)
+        }
+    }
 
     private suspend fun applyLocally(merged: Bundle) {
+        val localBooks = app.bookDao.allRaw().associateBy { it.uuid }
         // Covers are device-local (never in the bundle); keep ours on overwrite.
-        merged.books.forEach { book ->
-            val localCover = app.bookDao.byUuid(book.uuid)?.coverPath
-            app.bookDao.upsert(book.copy(coverPath = book.coverPath ?: localCover))
+        val books = merged.books.map { book ->
+            book.copy(coverPath = localBooks[book.uuid]?.coverPath)
         }
-        merged.positions.forEach { app.bookDao.upsertPosition(it) }
-        merged.annotations.forEach { app.annotationDao.upsert(it) }
-        merged.collections.forEach { app.collectionDao.upsertCollection(it) }
-        merged.tags.forEach { app.collectionDao.upsertTag(it) }
-        merged.bookCollections.forEach { app.collectionDao.upsertBookCollection(it) }
-        merged.bookTags.forEach { app.collectionDao.upsertBookTag(it) }
-        merged.panels.forEach { app.comicPanelDao.insert(it) }
-        merged.strokes.forEach { app.pdfStrokeDao.insert(it) }
-        merged.sessions.forEach { app.sessionDao.upsert(it) }
+        app.database.withTransaction {
+            app.bookDao.upsertAll(books)
+            merged.positions.forEach { app.bookDao.upsertPosition(it) }
+            app.annotationDao.upsertAll(merged.annotations)
+            app.collectionDao.upsertCollections(merged.collections)
+            app.collectionDao.upsertTags(merged.tags)
+            app.collectionDao.upsertBookCollections(merged.bookCollections)
+            app.collectionDao.upsertBookTags(merged.bookTags)
+            app.comicPanelDao.insertAll(merged.panels)
+            app.pdfStrokeDao.insertAll(merged.strokes)
+            app.sessionDao.upsertAll(merged.sessions)
+            books.filter { it.deletedAt != null }.forEach { app.searchDao.deleteForBook(it.uuid) }
+        }
+        // A remote tombstone must clean the same device-local derivatives as a
+        // deletion performed on this device.
+        books.filter { it.deletedAt != null }.forEach { book ->
+            File(app.booksDir, book.fileName).delete()
+            localBooks[book.uuid]?.coverPath?.let { File(it).delete() }
+        }
     }
 
     /** Pulls files this device lacks; pushes files the folder lacks. */
@@ -118,6 +192,10 @@ class SyncEngine(private val app: VellumApp) {
             ?: return 0 to 0
         var pulled = 0
         var pushed = 0
+        books.filter { it.deletedAt != null }.forEach { book ->
+            booksDir.findFile(book.fileName)?.delete()
+            booksDir.findFile("${book.fileName}.part")?.delete()
+        }
         books.filter { it.deletedAt == null }.forEach { book ->
             val local = File(app.booksDir, book.fileName)
             val remote = booksDir.findFile(book.fileName)
@@ -211,13 +289,15 @@ class SyncEngine(private val app: VellumApp) {
                     it.getLong("endedAt"), it.getLong("msRead"), it.getInt("pagesTurned"),
                 )
             },
+            deviceAcks = root.optJSONObject("deviceAcks")?.let { acks ->
+                acks.keys().asSequence().associateWith { acks.optLong(it, 0L) }
+            }.orEmpty(),
         )
     }
 
     private fun writeBundle(dir: DocumentFile, bundle: Bundle) {
         val root = JSONObject()
         root.put("version", 1)
-        root.put("exportedAt", System.currentTimeMillis())
         root.put("books", JSONArray(bundle.books.map { it.toJson() }))
         root.put("positions", JSONArray(bundle.positions.map { it.toJson() }))
         root.put("annotations", JSONArray(bundle.annotations.map { it.toJson() }))
@@ -287,6 +367,12 @@ class SyncEngine(private val app: VellumApp) {
                 },
             ),
         )
+        root.put("deviceAcks", JSONObject(bundle.deviceAcks))
+        val existing = dir.findFile("vellum-sync.json")?.let { file ->
+            app.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readText() }
+        }
+        if (existing != null && sameBundleContent(existing, root)) return
+        root.put("exportedAt", System.currentTimeMillis())
         // Stage-then-swap: an in-place overwrite torn by a crash or by the
         // paired sync tool shipping a half-write leaves invalid JSON that
         // would fail every later sync. A *missing* bundle is safely rebuilt,
@@ -305,6 +391,24 @@ class SyncEngine(private val app: VellumApp) {
         }
         dir.findFile("vellum-sync.json")?.delete()
         staging.renameTo("vellum-sync.json")
+    }
+
+    private fun sameBundleContent(existing: String, replacement: JSONObject): Boolean = try {
+        val current = JSONObject(existing).apply { remove("exportedAt") }
+        canonicalJson(current) == canonicalJson(replacement)
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun canonicalJson(value: Any?): String = when (value) {
+        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(",", "{", "}") { key ->
+            JSONObject.quote(key) + ":" + canonicalJson(value.opt(key))
+        }
+        is JSONArray -> (0 until value.length()).map { canonicalJson(value.opt(it)) }
+            .sorted().joinToString(",", "[", "]")
+        JSONObject.NULL, null -> "null"
+        is String -> JSONObject.quote(value)
+        else -> value.toString()
     }
 
     // ---- JSON mapping helpers --------------------------------------------
@@ -375,4 +479,9 @@ class SyncEngine(private val app: VellumApp) {
         updatedAt = getLong("updatedAt"),
         deletedAt = optLongOrNull("deletedAt"),
     )
+
+    private companion object {
+        const val TOMBSTONE_GRACE_MS = 30L * 24L * 60L * 60L * 1000L
+        const val MAX_CLOCK_SKEW_MS = 5L * 60L * 1000L
+    }
 }

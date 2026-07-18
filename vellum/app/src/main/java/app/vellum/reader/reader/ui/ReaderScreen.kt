@@ -1,5 +1,6 @@
 package app.vellum.reader.reader.ui
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.view.HapticFeedbackConstants
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -77,14 +79,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -95,6 +99,7 @@ import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.AnnotationEntity
 import app.vellum.reader.core.model.HighlightColors
 import app.vellum.reader.core.model.ReadingTheme
+import app.vellum.reader.core.session.ActiveReadingEffect
 import app.vellum.reader.core.settings.ReaderSettings
 import app.vellum.reader.core.theme.sharedCoverBounds
 import app.vellum.reader.core.settings.TurnStyle
@@ -119,7 +124,9 @@ private class TurnSession(
     val target: TurnTarget,
     val shader: android.graphics.RuntimeShader,
     val progress: Animatable<Float, androidx.compose.animation.core.AnimationVector1D>,
-)
+) {
+    val settling = java.util.concurrent.atomic.AtomicBoolean(false)
+}
 
 /**
  * The reading surface: page canvas underneath, gesture layer on top, and
@@ -133,6 +140,8 @@ fun ReaderScreen(
     bookUuid: String,
     initialChapter: Int = -1,
     initialOffset: Int = -1,
+    passageJump: String = "",
+    onPassageJumpConsumed: () -> Unit = {},
     onBack: () -> Unit,
     onSearchInBook: (String) -> Unit = {},
 ) {
@@ -143,6 +152,16 @@ fun ReaderScreen(
     }
     val settings by app.settingsStore.settings.collectAsState(initial = ReaderSettings())
     val ui by viewModel.ui.collectAsState()
+    ActiveReadingEffect(viewModel::setSessionActive)
+    LaunchedEffect(passageJump, ui.loading) {
+        if (passageJump.isNotBlank() && !ui.loading) {
+            val parts = passageJump.split(':', limit = 2)
+            val chapter = parts.getOrNull(0)?.toIntOrNull()
+            val offset = parts.getOrNull(1)?.toIntOrNull()
+            if (chapter != null && offset != null) viewModel.jumpTo(chapter, offset)
+            onPassageJumpConsumed()
+        }
+    }
     val selection by viewModel.selection.collectAsState()
     val annotations by viewModel.annotations.collectAsState()
     val ttsStatus by viewModel.ttsStatus.collectAsState()
@@ -154,7 +173,7 @@ fun ReaderScreen(
     val layoutDirection = LocalLayoutDirection.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     var settingsSheetOpen by remember { mutableStateOf(false) }
     var annotationsListOpen by remember { mutableStateOf(false) }
     var speedMenuOpen by remember { mutableStateOf(false) }
@@ -164,8 +183,11 @@ fun ReaderScreen(
     var editorAnnotation by remember { mutableStateOf<AnnotationEntity?>(null) }
     var lookup by remember { mutableStateOf<Pair<String, String>?>(null) }
 
-    // TTS keeps the screen awake; sessions record silently either way.
-    view.keepScreenOn = ttsStatus == TtsStatus.PLAYING
+    // TTS keeps the screen awake only while this reader remains composed.
+    androidx.compose.runtime.DisposableEffect(view, ttsStatus) {
+        view.keepScreenOn = ttsStatus == TtsStatus.PLAYING
+        onDispose { view.keepScreenOn = false }
+    }
 
     // Optional ambient rustle, synthesized once, played on page commits.
     val rustle = remember(settings.pageRustle) {
@@ -240,7 +262,8 @@ fun ReaderScreen(
         BoxWithConstraints(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
             val widthPx = constraints.maxWidth
             val heightPx = constraints.maxHeight
-            val columns = if (widthPx > heightPx) 2 else 1
+            // A spread needs tablet-class width; landscape phones stay legible.
+            val columns = if (maxWidth >= 840.dp) 2 else 1
             val marginPx = with(density) { settings.typography.pageMarginDp.dp.toPx() }
             val curlRadiusPx = with(density) { 88.dp.toPx() }
 
@@ -253,6 +276,7 @@ fun ReaderScreen(
             }
 
             var turnSession by remember { mutableStateOf<TurnSession?>(null) }
+            var turnPreparing by remember { mutableStateOf(false) }
 
             /** Draw spec for any (chapter, page) this screen can currently show. */
             fun specFor(chapterIndex: Int, pageIndex: Int): ReaderContentRenderer.SpreadSpec? {
@@ -323,32 +347,38 @@ fun ReaderScreen(
              * the configured curl shader — everything the first frame needs.
              */
             suspend fun beginCurl(forward: Boolean): TurnSession? {
-                if (turnSession != null) return turnSession
-                val target = viewModel.peekTurnTarget(forward) ?: return null
-                val currentSpec = specFor(ui.chapterIndex, ui.pageIndex) ?: return null
-                val targetSpec = specFor(target.chapterIndex, target.pageIndex) ?: return null
-                val (current, next) = withContext(Dispatchers.Default) {
-                    ReaderContentRenderer.renderToBitmap(widthPx, heightPx, density, layoutDirection, currentSpec) to
-                        ReaderContentRenderer.renderToBitmap(widthPx, heightPx, density, layoutDirection, targetSpec)
+                turnSession?.let { return it }
+                if (turnPreparing) return null
+                turnPreparing = true
+                try {
+                    val target = viewModel.peekTurnTarget(forward) ?: return null
+                    val currentSpec = specFor(ui.chapterIndex, ui.pageIndex) ?: return null
+                    val targetSpec = specFor(target.chapterIndex, target.pageIndex) ?: return null
+                    val (current, next) = withContext(Dispatchers.Default) {
+                        ReaderContentRenderer.renderToBitmap(widthPx, heightPx, density, layoutDirection, currentSpec) to
+                            ReaderContentRenderer.renderToBitmap(widthPx, heightPx, density, layoutDirection, targetSpec)
+                    }
+                    val front: ImageBitmap = if (forward) current else next
+                    val under: ImageBitmap = if (forward) next else current
+                    val shader = PageCurlShader.create(
+                        widthPx.toFloat(), heightPx.toFloat(),
+                        progress = if (forward) 0f else 1f,
+                        radiusPx = curlRadiusPx,
+                        paperColor = theme.pageColor,
+                        frontPage = front,
+                        underPage = under,
+                    )
+                    return TurnSession(forward, target, shader, Animatable(if (forward) 0f else 1f)).also {
+                        turnSession = it
+                    }
+                } finally {
+                    turnPreparing = false
                 }
-                val front: ImageBitmap = if (forward) current else next
-                val under: ImageBitmap = if (forward) next else current
-                val shader = PageCurlShader.create(
-                    widthPx.toFloat(), heightPx.toFloat(),
-                    progress = if (forward) 0f else 1f,
-                    forward = forward,
-                    radiusPx = curlRadiusPx,
-                    paperColor = theme.pageColor,
-                    frontPage = front,
-                    underPage = under,
-                )
-                val session = TurnSession(forward, target, shader, Animatable(if (forward) 0f else 1f))
-                turnSession = session
-                return session
             }
 
             /** Finishes a curl: play to the end (or back), commit or discard. */
             suspend fun settleCurl(session: TurnSession, commit: Boolean) {
+                if (!session.settling.compareAndSet(false, true)) return
                 val end = when {
                     commit -> if (session.forward) 1f else 0f
                     else -> if (session.forward) 0f else 1f
@@ -389,7 +419,10 @@ fun ReaderScreen(
                     label = "pageTurn",
                 ) { key ->
                     val spec = specFor(key.chapterIndex, key.pageIndex)
-                    Canvas(modifier = Modifier.fillMaxSize()) { spec?.let { drawSpread(it) } }
+                    val pageText = viewModel.pageTextFor(key.chapterIndex, key.pageIndex) ?: "Page"
+                    Canvas(
+                        modifier = Modifier.fillMaxSize().semantics { contentDescription = pageText },
+                    ) { spec?.let { drawSpread(it) } }
                 }
             } else {
                 val session = turnSession
@@ -415,6 +448,12 @@ fun ReaderScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .semantics {
+                        customActions = listOf(
+                            CustomAccessibilityAction("Previous page") { viewModel.prevPage(); true },
+                            CustomAccessibilityAction("Next page") { viewModel.nextPage(); true },
+                        )
+                    }
                     .pointerInput(settings.turnStyle) {
                         detectTapGestures(
                             onLongPress = { offset ->
@@ -517,7 +556,13 @@ fun ReaderScreen(
                         },
                         onNote = { editorForSelection = true },
                         onCopy = {
-                            viewModel.selectedText()?.let { clipboard.setText(AnnotatedString(it)) }
+                            viewModel.selectedText()?.let { text ->
+                                scope.launch {
+                                    clipboard.setClipEntry(
+                                        ClipEntry(ClipData.newPlainText("Selected book text", text)),
+                                    )
+                                }
+                            }
                             viewModel.clearSelection()
                         },
                         onDefine = {
@@ -837,6 +882,7 @@ private fun ReaderChrome(
     onScrub: (Float) -> Unit,
     onReturn: () -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxSize()) {
         AnimatedVisibility(
             visible = visible,
@@ -862,18 +908,40 @@ private fun ReaderChrome(
                     IconButton(onClick = onStartTts) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = "Read aloud")
                     }
-                    IconButton(onClick = onAnnotations) {
-                        Icon(Icons.Filled.Edit, contentDescription = "Highlights and notes")
-                    }
-                    IconButton(onClick = onSearch) {
-                        Icon(Icons.Filled.Search, contentDescription = "Search in book")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Reading settings")
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "More reader actions")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("Highlights and notes")
+                                        Text(
+                                            "Press and hold text to create a highlight",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                                onClick = { menuOpen = false; onAnnotations() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Search in book") },
+                                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                onClick = { menuOpen = false; onSearch() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Reading settings") },
+                                leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                                onClick = { menuOpen = false; onOpenSettings() },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = theme.pageColor.copy(alpha = 0.94f),
+                    containerColor = theme.pageColor,
                     titleContentColor = theme.inkColor,
                     navigationIconContentColor = theme.inkColor,
                     actionIconContentColor = theme.inkColor,
@@ -897,7 +965,7 @@ private fun ReaderChrome(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(theme.pageColor.copy(alpha = 0.94f))
+                    .background(theme.pageColor)
                     .navigationBarsPadding(),
             ) {
                 SpineScrubber(

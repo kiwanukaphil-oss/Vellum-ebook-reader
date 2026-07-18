@@ -12,6 +12,9 @@ import app.vellum.reader.core.data.SessionDao
 import app.vellum.reader.core.data.VellumDatabase
 import app.vellum.reader.core.settings.ReaderSettingsStore
 import app.vellum.reader.epub.EpubLibraryOpener
+import app.vellum.reader.reader.tts.ElevenLabsAudioCache
+import app.vellum.reader.reader.tts.ElevenLabsClient
+import app.vellum.reader.reader.tts.ElevenLabsCredentialStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,6 +35,7 @@ class VellumApp : Application() {
                 VellumDatabase.MIGRATION_3_4,
                 VellumDatabase.MIGRATION_4_5,
                 VellumDatabase.MIGRATION_5_6,
+                VellumDatabase.MIGRATION_6_7,
             )
             .build()
     }
@@ -48,10 +52,15 @@ class VellumApp : Application() {
 
     val epubOpener: EpubLibraryOpener by lazy { EpubLibraryOpener(this) }
 
+    /** Process-wide so paid synthesis requests are shared across reader recreation. */
+    val elevenLabsClient: ElevenLabsClient by lazy { ElevenLabsClient() }
+    val elevenLabsCredentials: ElevenLabsCredentialStore by lazy { ElevenLabsCredentialStore(this) }
+    val elevenLabsCache: ElevenLabsAudioCache by lazy { ElevenLabsAudioCache(this) }
+
     /** App-private home of every imported book file. */
     val booksDir: File by lazy { File(filesDir, "books").apply { mkdirs() } }
 
-    /** Extracted cover images, named <bookUuid>.png. */
+    /** Extracted cover images, named <bookUuid>.webp. */
     val coversDir: File by lazy { File(filesDir, "covers").apply { mkdirs() } }
 
     /** Outlives any screen — used by share/open-with imports. */

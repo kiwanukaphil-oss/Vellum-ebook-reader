@@ -1,17 +1,25 @@
 # Vellum — Bugs and Issues Requiring Fixes
 
-Review date: 2026-07-17
+Review date: 2026-07-18
 
 This document contains only confirmed bugs, missing committed functionality, accessibility defects, UI defects, and engineering issues found during the review. It intentionally excludes proposed enhancements and redesign recommendations.
 
-## Status — fix pass of 2026-07-17
+## Status — end-to-end fix pass of 2026-07-18
 
-**Resolved** (see the correspondingly named commits on `main`):
-1 (markOpened/LWW), 2 (atomic sync writes), 6 (LIMIT 30), 7 (dataExtractionRules — DB/settings back up, books/covers/voice pack excluded), 9 (silent intent imports — snackbar notices + crash guard), 17 (edge-to-edge/status-bar contrast), 18 (theme — Ink & Linen), 19 (app icon + splash), 23 (empty-state formats), 27 (AGP 8.13.2), 29 (git repo), 30 (progression zeroed), 31 (locale ink), 32 (re-import/dedup), 33 (Insights key crash), 34 (landscape spreads), 35 (guided-view tap zones), 36 (renderer close races), 40 (EPUB images), 42 (zoom re-render), 43 (unsupervised import scope — guarded), 44 (progression 100%), 48 (ink preview color), 49 (decode spinner), 25 (reading-theme labels — labeled "Aa" chips in the reworked settings sheet, 2026-07-18).
+**Current unresolved confirmed issues: none.** All 55 numbered issues and every item in the Low section were addressed in the implementation pass. This includes the previously partial fixes for EPUB registration, format metadata, search cost, and failure reporting.
 
-**Partially addressed:** 8 (failures now surfaced/logged; registration still non-transactional — see 45), 22 (unchanged in DB; format still shown as author), 50 (stale queries cancelled; title map now uncapped but still fetched per search), 55 (Log.e added on import/sync/TTS failure paths; not yet comprehensive).
+The follow-up audit also found and resolved five ElevenLabs-specific defects: duplicate paid generation during reader recreation, caller cancellation discarding a paid response, corrupt or partially written cache entries being accepted, unbounded narration-cache growth, and incomplete voice pagination. Audio focus, noisy-route interruption, restored-account refresh, and fallback when credentials or a voice are missing were fixed in the same pass.
 
-**Still open:** 3 (sync-folder/local cleanup of deleted books), 4 (session time counts background), 5 (runBlocking teardown), 10 (duplicate reader destinations), 11 (one result per chapter), 12 (goals claim), 13 (schema exports/tests), 14–16 (accessibility), 20 (crowded reader top bar), 21 (forced two-column landscape), 24 (long-press discoverability), 26 (cold start), 28 (minify), 37–39, 41, 45–47, 51–54, and the Low list.
+Verification completed on 2026-07-18:
+
+- debug and minified/resource-shrunk release builds succeed;
+- Android lint succeeds with no errors;
+- JVM regression tests cover active-only session timing and full-text search escaping/occurrences;
+- connected-device tests cover the v6→v7 migration, ElevenLabs single-flight generation, explicit-clear races, and corrupt-cache rejection;
+- five forced cold launches on a physical Android 14 device measured 597–627 ms (608 ms median);
+- the generated Room v7 schema is checked in under `vellum/app/schemas/`.
+
+The sections below are retained as the audit history and describe the defects that were fixed; they are not an open backlog.
 
 ## Critical
 
@@ -523,4 +531,3 @@ Evidence:
 - **`octet-stream` missing from intent filters**, so many downloaded EPUBs never offer Vellum in the chooser despite the importer's magic-byte sniffing handling them — `AndroidManifest.xml:22-48`; deprecated `getParcelableExtra` despite minSdk 33 — `MainActivity.kt:40-41`; default `launchMode` stacks a second activity instance on VIEW-while-running (pairs with issue 32) — `MainActivity.kt:24-33`.
 - **`deleteBooks` resolves selections against the filtered list** — a concurrently filtered-out book silently survives a confirmed remove; stale selections of synced-away books are never pruned — `LibraryViewModel.kt:164-167`.
 - **Session DAO duplication:** both `insert` and `upsert` for the same entity with fully-qualified annotations — `SessionDao.kt:11-18`.
-

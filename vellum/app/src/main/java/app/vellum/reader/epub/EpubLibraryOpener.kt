@@ -2,6 +2,7 @@ package app.vellum.reader.epub
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.services.cover
@@ -25,13 +26,21 @@ class EpubLibraryOpener(context: Context) {
     )
 
     suspend fun open(file: File): OpenedEpub? {
-        val asset = assetRetriever.retrieve(file).getOrElse { return null }
+        val asset = assetRetriever.retrieve(file).getOrElse { failure ->
+            Log.e(TAG, "Could not retrieve EPUB asset ${file.name}: $failure")
+            return null
+        }
         val publication = publicationOpener.open(asset, allowUserInteraction = false)
-            .getOrElse {
+            .getOrElse { failure ->
+                Log.e(TAG, "Could not parse EPUB ${file.name}: $failure")
                 asset.close()
                 return null
             }
         return OpenedEpub(publication)
+    }
+
+    private companion object {
+        const val TAG = "VellumEpub"
     }
 }
 
@@ -94,6 +103,7 @@ class OpenedEpub(private val publication: Publication) {
     suspend fun coverBitmap(): Bitmap? = try {
         publication.cover()
     } catch (e: Exception) {
+        Log.w("VellumEpub", "Could not decode the publication cover", e)
         null
     }
 
@@ -107,6 +117,7 @@ class OpenedEpub(private val publication: Publication) {
             val presentation = publication.metadata.otherMetadata["presentation"] as? Map<*, *>
             presentation?.get("layout")?.toString()?.equals("fixed", ignoreCase = true) == true
         } catch (e: Exception) {
+            Log.w("VellumEpub", "Could not read fixed-layout metadata", e)
             false
         }
 

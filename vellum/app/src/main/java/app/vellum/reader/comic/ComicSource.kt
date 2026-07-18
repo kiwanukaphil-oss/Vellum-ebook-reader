@@ -135,12 +135,10 @@ class ComicPageStore(private val source: ComicSource) {
         }
     }
 
-    fun close() {
-        kotlinx.coroutines.runBlocking {
-            mutex.withLock {
-                closed = true
-                source.close()
-            }
+    suspend fun close() {
+        mutex.withLock {
+            closed = true
+            source.close()
         }
     }
 }

@@ -5,8 +5,8 @@ import androidx.lifecycle.viewModelScope
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.PdfStrokeEntity
 import app.vellum.reader.core.data.ReadingPositionEntity
-import app.vellum.reader.core.data.ReadingSessionEntity
-import kotlinx.coroutines.runBlocking
+import app.vellum.reader.core.session.ActiveReadingSession
+import kotlinx.coroutines.Dispatchers
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -46,7 +46,7 @@ class PdfReaderViewModel(
     var renderer: PdfPageRenderer? = null
         private set
 
-    private val sessionStartedAt = System.currentTimeMillis()
+    private val readingSession = ActiveReadingSession()
     private var pagesTurned = 0
     private var lastPersistedPage = -1
 
@@ -83,6 +83,8 @@ class PdfReaderViewModel(
     }
 
     fun toggleChrome() = _ui.update { it.copy(chromeVisible = !it.chromeVisible) }
+
+    fun setSessionActive(active: Boolean) = readingSession.setActive(active)
 
     fun setMarkupMode(enabled: Boolean) = _ui.update { it.copy(markupMode = enabled) }
 
@@ -149,22 +151,12 @@ class PdfReaderViewModel(
     }
 
     override fun onCleared() {
-        val elapsed = System.currentTimeMillis() - sessionStartedAt
-        if (elapsed >= 30_000) {
-            runBlocking {
-                app.sessionDao.insert(
-                    ReadingSessionEntity(
-                        uuid = UUID.randomUUID().toString(),
-                        bookUuid = bookUuid,
-                        startedAt = sessionStartedAt,
-                        endedAt = sessionStartedAt + elapsed,
-                        msRead = elapsed,
-                        pagesTurned = pagesTurned,
-                    ),
-                )
-            }
+        val session = readingSession.finish(bookUuid, pagesTurned)
+        val rendererToClose = renderer
+        app.appScope.launch(Dispatchers.IO) {
+            session?.let { app.sessionDao.upsert(it) }
+            rendererToClose?.close()
         }
-        renderer?.close()
     }
 
     companion object {

@@ -19,8 +19,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BookTagCrossRef::class,
         BookTextFts::class,
     ],
-    version = 6,
-    exportSchema = false,
+    version = 7,
+    exportSchema = true,
 )
 abstract class VellumDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
@@ -32,6 +32,27 @@ abstract class VellumDatabase : RoomDatabase() {
     abstract fun sessionDao(): SessionDao
 
     companion object {
+        /** v6 -> v7: indices for high-frequency per-book child lookups. */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_annotations_bookUuid` ON `annotations` (`bookUuid`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_reading_sessions_bookUuid` ON `reading_sessions` (`bookUuid`)")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_comic_panels_bookUuid_pageIndex` " +
+                        "ON `comic_panels` (`bookUuid`, `pageIndex`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_pdf_strokes_bookUuid_pageIndex` " +
+                        "ON `pdf_strokes` (`bookUuid`, `pageIndex`)",
+                )
+                db.execSQL(
+                    "UPDATE `books` SET `author` = 'Unknown author' " +
+                        "WHERE (`format` = 'pdf' AND `author` = 'PDF') " +
+                        "OR (`format` IN ('cbz', 'cbr', 'comic-epub') AND `author` = 'Comic')",
+                )
+            }
+        }
+
         /** v1 → v2: series/cover columns, collections, tags, full-text index. */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {

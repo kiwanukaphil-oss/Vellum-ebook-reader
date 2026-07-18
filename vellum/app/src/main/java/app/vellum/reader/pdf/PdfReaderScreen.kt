@@ -63,6 +63,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -70,6 +73,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.PdfStrokeEntity
 import app.vellum.reader.core.model.HighlightColors
+import app.vellum.reader.core.session.ActiveReadingEffect
 import app.vellum.reader.core.settings.ReaderSettings
 import app.vellum.reader.core.theme.sharedCoverBounds
 import kotlinx.coroutines.flow.debounce
@@ -99,6 +103,7 @@ fun PdfReaderScreen(bookUuid: String, onBack: () -> Unit) {
     val viewModel: PdfReaderViewModel = viewModel(key = "pdf-$bookUuid") { PdfReaderViewModel(app, bookUuid) }
     val settings by app.settingsStore.settings.collectAsState(initial = ReaderSettings())
     val ui by viewModel.ui.collectAsState()
+    ActiveReadingEffect(viewModel::setSessionActive)
     val strokesByPage by viewModel.strokesByPage.collectAsState()
     val theme = settings.theme
 
@@ -323,6 +328,10 @@ private fun PdfChrome(
                                         color = MaterialTheme.colorScheme.primary,
                                         shape = CircleShape,
                                     )
+                                    .semantics {
+                                        contentDescription = "${highlight.id.replaceFirstChar { it.uppercase() }} ink"
+                                        selected = highlight.id == ui.markupColorId
+                                    }
                                     .clickable { onColor(highlight.id) },
                             )
                         }

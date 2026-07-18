@@ -19,6 +19,9 @@ interface AnnotationDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(annotation: AnnotationEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(annotations: List<AnnotationEntity>)
+
     @Query("UPDATE annotations SET deletedAt = :deletedAt, updatedAt = :deletedAt WHERE uuid = :uuid")
     suspend fun softDelete(uuid: String, deletedAt: Long)
 
@@ -30,4 +33,7 @@ interface AnnotationDao {
 
     @Query("SELECT * FROM annotations")
     suspend fun allRaw(): List<AnnotationEntity>
+
+    @Query("DELETE FROM annotations WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeTombstones(cutoff: Long)
 }

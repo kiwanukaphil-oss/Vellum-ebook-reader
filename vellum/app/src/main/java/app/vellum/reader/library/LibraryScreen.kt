@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -211,26 +212,29 @@ fun LibraryScreen(
                 enter = scaleIn(tween(180)) + fadeIn(tween(180)),
                 exit = scaleOut(tween(140)) + fadeOut(tween(140)),
             ) {
-                FloatingActionButton(onClick = {
-                    // Comic archives surface under many mimes depending on the
-                    // file manager (rar/zip variants) — list them all so .cbr
-                    // and .cbz are selectable; import sniffs the real format.
-                    picker.launch(
-                        arrayOf(
-                            "application/epub+zip",
-                            "application/pdf",
-                            "application/zip",
-                            "application/x-rar-compressed",
-                            "application/vnd.rar",
-                            "application/rar",
-                            "application/x-cbz",
-                            "application/x-cbr",
-                            "application/vnd.comicbook+zip",
-                            "application/vnd.comicbook-rar",
-                            "application/octet-stream",
-                        ),
-                    )
-                }) {
+                FloatingActionButton(
+                    onClick = {
+                        // Comic archives surface under many mimes depending on the
+                        // file manager; list them all and sniff the real format.
+                        picker.launch(
+                            arrayOf(
+                                "application/epub+zip",
+                                "application/pdf",
+                                "application/zip",
+                                "application/x-rar-compressed",
+                                "application/vnd.rar",
+                                "application/rar",
+                                "application/x-cbz",
+                                "application/x-cbr",
+                                "application/vnd.comicbook+zip",
+                                "application/vnd.comicbook-rar",
+                                "application/octet-stream",
+                            ),
+                        )
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) {
                     Icon(Icons.Filled.Add, contentDescription = "Add a book")
                 }
             }
@@ -313,6 +317,7 @@ fun LibraryScreen(
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.toggleSelection(book.uuid)
                             },
+                            onManage = { viewModel.toggleSelection(book.uuid) },
                             modifier = Modifier.animateItem(),
                         )
                     }
@@ -379,6 +384,7 @@ private fun BookCard(
     isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onManage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -429,6 +435,27 @@ private fun BookCard(
                         modifier = Modifier.size(16.dp),
                     )
                 }
+            } else {
+                IconButton(
+                    onClick = onManage,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(2.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.90f), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = "Manage ${book.title}",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+                }
             }
         }
         Text(
@@ -441,7 +468,7 @@ private fun BookCard(
         )
         val caption = book.seriesName?.let { series ->
             book.seriesIndex?.let { "$series · ${if (it % 1f == 0f) it.toInt() else it}" } ?: series
-        } ?: book.author
+        } ?: if (book.author == "Unknown author") book.format.displayFormat() else book.author
         Text(
             text = caption,
             style = MaterialTheme.typography.labelSmall,
@@ -450,6 +477,12 @@ private fun BookCard(
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+private fun String.displayFormat(): String = when (this) {
+    "pdf" -> "PDF"
+    "cbz", "cbr", "comic-epub" -> "Comic"
+    else -> uppercase()
 }
 
 /** Books without embedded art get a quiet colored board with the title set in serif. */

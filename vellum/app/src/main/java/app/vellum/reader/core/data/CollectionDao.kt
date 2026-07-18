@@ -33,6 +33,18 @@ interface CollectionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertBookTag(link: BookTagCrossRef)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCollections(rows: List<CollectionEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertTags(rows: List<TagEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertBookCollections(rows: List<BookCollectionCrossRef>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertBookTags(rows: List<BookTagCrossRef>)
+
     // ---- Sync: raw table dumps including tombstones ----------------------
     @Query("SELECT * FROM collections")
     suspend fun allCollectionsRaw(): List<CollectionEntity>
@@ -45,4 +57,16 @@ interface CollectionDao {
 
     @Query("SELECT * FROM book_tags")
     suspend fun allBookTagsRaw(): List<BookTagCrossRef>
+
+    @Query("DELETE FROM collections WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeCollectionTombstones(cutoff: Long)
+
+    @Query("DELETE FROM tags WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeTagTombstones(cutoff: Long)
+
+    @Query("DELETE FROM book_collections WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeBookCollectionTombstones(cutoff: Long)
+
+    @Query("DELETE FROM book_tags WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeBookTagTombstones(cutoff: Long)
 }

@@ -2,6 +2,7 @@ package app.vellum.reader.core.data
 
 import androidx.room.Entity
 import androidx.room.Fts4
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -47,7 +48,7 @@ data class ReadingPositionEntity(
  * range is a hint that survives typography changes (offsets are layout-free)
  * and lets re-anchoring recover if the underlying file ever changes.
  */
-@Entity(tableName = "annotations")
+@Entity(tableName = "annotations", indices = [Index("bookUuid")])
 data class AnnotationEntity(
     @PrimaryKey val uuid: String,
     val bookUuid: String,
@@ -67,7 +68,7 @@ data class AnnotationEntity(
  * One sitting with one book, any format. Insights (streaks, time, pages/hour)
  * are all derived from these rows; nothing is computed destructively.
  */
-@Entity(tableName = "reading_sessions")
+@Entity(tableName = "reading_sessions", indices = [Index("bookUuid")])
 data class ReadingSessionEntity(
     @PrimaryKey val uuid: String,
     val bookUuid: String,
@@ -81,7 +82,7 @@ data class ReadingSessionEntity(
  * A reader-defined panel rectangle on a comic page (normalized 0..1), in
  * reading order — the source of the guided panel-by-panel view.
  */
-@Entity(tableName = "comic_panels")
+@Entity(tableName = "comic_panels", indices = [Index(value = ["bookUuid", "pageIndex"])])
 data class ComicPanelEntity(
     @PrimaryKey val uuid: String,
     val bookUuid: String,
@@ -100,7 +101,7 @@ data class ComicPanelEntity(
  * One freehand ink stroke on a PDF page. Points are normalized (0..1) page
  * coordinates serialized as "x,y;x,y;…" — zoom- and renderer-independent.
  */
-@Entity(tableName = "pdf_strokes")
+@Entity(tableName = "pdf_strokes", indices = [Index(value = ["bookUuid", "pageIndex"])])
 data class PdfStrokeEntity(
     @PrimaryKey val uuid: String,
     val bookUuid: String,

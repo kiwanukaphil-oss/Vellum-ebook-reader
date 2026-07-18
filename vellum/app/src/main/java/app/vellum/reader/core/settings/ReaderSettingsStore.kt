@@ -9,7 +9,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import app.vellum.reader.core.model.ReadingTheme
 import app.vellum.reader.core.model.TypographySettings
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 private val Context.readerPrefs by preferencesDataStore(name = "reader_settings")
 
@@ -51,6 +53,8 @@ data class ReaderSettings(
     val readerBrightness: Float = -1f,
     val syncFolderUri: String? = null,
     val lastSyncAt: Long = 0,
+    /** Calendar-year reading target; zero disables the goal. */
+    val yearlyGoalMinutes: Int = 0,
     /** System-TTS voice name; null = engine default. */
     val ttsVoice: String? = null,
     val narrationProvider: NarrationProvider = NarrationProvider.SYSTEM,
@@ -80,6 +84,7 @@ class ReaderSettingsStore(private val context: Context) {
     private val brightnessKey = floatPreferencesKey("reader_brightness")
     private val syncFolderKey = stringPreferencesKey("sync_folder_uri")
     private val lastSyncKey = androidx.datastore.preferences.core.longPreferencesKey("last_sync_at")
+    private val yearlyGoalMinutesKey = androidx.datastore.preferences.core.intPreferencesKey("yearly_goal_minutes")
     private val ttsVoiceKey = stringPreferencesKey("tts_voice")
     private val legacyTtsEngineKey = stringPreferencesKey("tts_engine")
     private val narrationProviderKey = stringPreferencesKey("narration_provider")
@@ -87,6 +92,7 @@ class ReaderSettingsStore(private val context: Context) {
     private val elevenLabsVoiceIdKey = stringPreferencesKey("elevenlabs_voice_id")
     private val elevenLabsVoiceNameKey = stringPreferencesKey("elevenlabs_voice_name")
     private val elevenLabsModelKey = stringPreferencesKey("elevenlabs_model")
+    private val syncDeviceIdKey = stringPreferencesKey("sync_device_id")
 
     val settings: Flow<ReaderSettings> = context.readerPrefs.data.map { prefs ->
         val defaults = TypographySettings()
@@ -113,6 +119,7 @@ class ReaderSettingsStore(private val context: Context) {
             readerBrightness = prefs[brightnessKey] ?: -1f,
             syncFolderUri = prefs[syncFolderKey],
             lastSyncAt = prefs[lastSyncKey] ?: 0,
+            yearlyGoalMinutes = prefs[yearlyGoalMinutesKey] ?: 0,
             ttsVoice = prefs[ttsVoiceKey],
             narrationProvider = NarrationProvider.fromId(
                 prefs[narrationProviderKey] ?: prefs[legacyTtsEngineKey],
@@ -162,6 +169,10 @@ class ReaderSettingsStore(private val context: Context) {
 
     suspend fun setLastSyncAt(at: Long) = context.readerPrefs.edit { it[lastSyncKey] = at }
 
+    suspend fun setYearlyGoalMinutes(minutes: Int) = context.readerPrefs.edit {
+        it[yearlyGoalMinutesKey] = minutes.coerceAtLeast(0)
+    }
+
     suspend fun setTtsVoice(name: String) = context.readerPrefs.edit { it[ttsVoiceKey] = name }
 
     suspend fun setNarrationProvider(provider: NarrationProvider) = context.readerPrefs.edit {
@@ -177,5 +188,14 @@ class ReaderSettingsStore(private val context: Context) {
 
     suspend fun setElevenLabsModel(model: ElevenLabsModel) = context.readerPrefs.edit {
         it[elevenLabsModelKey] = model.id
+    }
+
+    suspend fun syncDeviceId(): String {
+        context.readerPrefs.data.first()[syncDeviceIdKey]?.let { return it }
+        val candidate = UUID.randomUUID().toString()
+        context.readerPrefs.edit { prefs ->
+            if (prefs[syncDeviceIdKey] == null) prefs[syncDeviceIdKey] = candidate
+        }
+        return context.readerPrefs.data.first()[syncDeviceIdKey] ?: candidate
     }
 }

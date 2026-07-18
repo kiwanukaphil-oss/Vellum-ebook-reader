@@ -3,6 +3,7 @@ package app.vellum.reader.pdf
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -33,14 +34,6 @@ class PdfPageRenderer(file: File) {
 
     val pageCount: Int get() = renderer.pageCount
 
-    /** Width/height ratio of a page, for layout before the bitmap arrives. */
-    suspend fun pageAspectRatio(pageIndex: Int): Float = mutex.withLock {
-        if (closed) return@withLock 1f
-        renderer.openPage(pageIndex).use { page ->
-            page.width.toFloat() / page.height.toFloat()
-        }
-    }
-
     /** Renders (or returns cached) page bitmap; null once the renderer closed. */
     suspend fun renderPage(pageIndex: Int, targetWidthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
         val key = "$pageIndex@$targetWidthPx"
@@ -60,16 +53,15 @@ class PdfPageRenderer(file: File) {
     }
 
     /** Waits for any in-flight render — closing PdfRenderer mid-render crashes. */
-    fun close() {
-        kotlinx.coroutines.runBlocking {
-            mutex.withLock {
-                closed = true
-                try {
-                    renderer.close()
-                    descriptor.close()
-                } catch (e: Exception) {
-                    // Already closed — nothing to release.
-                }
+    suspend fun close() = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (closed) return@withLock
+            closed = true
+            try {
+                renderer.close()
+                descriptor.close()
+            } catch (exception: Exception) {
+                Log.w("PdfPageRenderer", "Unable to close the PDF renderer cleanly", exception)
             }
         }
     }

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.room.withTransaction
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.data.BookTextFts
@@ -53,7 +54,11 @@ class BookImporter(private val app: VellumApp) {
             return@withContext existing
         }
         // Sniff the real format — file pickers often report octet-stream.
-        val magic = temp.inputStream().use { stream -> ByteArray(4).also { stream.read(it) } }
+        val magic = temp.inputStream().use { stream ->
+            val bytes = ByteArray(4)
+            val read = stream.read(bytes)
+            if (read <= 0) ByteArray(0) else bytes.copyOf(read)
+        }
         val magicText = magic.decodeToString()
         val extension = when {
             magicText.startsWith("%PDF") -> "pdf"
@@ -62,7 +67,11 @@ class BookImporter(private val app: VellumApp) {
             else -> "epub"
         }
         val target = File(app.booksDir, "${temp.nameWithoutExtension}.$extension")
-        temp.renameTo(target)
+        if (!moveIntoPlace(temp, target)) {
+            temp.delete()
+            app.importNotices.tryEmit("Couldn't store that file")
+            return@withContext null
+        }
         val registered = registerFile(target, displayNameFor(uri))
         if (registered == null) {
             target.delete()
@@ -74,16 +83,37 @@ class BookImporter(private val app: VellumApp) {
         }
     }
 
+    private fun moveIntoPlace(source: File, target: File): Boolean {
+        if (source.renameTo(target)) return true
+        return try {
+            source.inputStream().use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            val complete = target.length() == source.length()
+            if (complete) source.delete() else target.delete()
+            complete
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not move imported file into place", e)
+            target.delete()
+            false
+        }
+    }
+
     /**
      * Finds a live library book whose file is byte-identical to [candidate].
      * Length check first narrows the field cheaply; only length twins are
      * byte-compared. Returns null when no registered, undeleted twin exists.
      */
     private suspend fun alreadyImportedCopy(candidate: File): BookEntity? {
-        val twin = app.booksDir.listFiles()
-            ?.filter { it.isFile && it != candidate && it.extension.lowercase() != "tmp" && it.length() == candidate.length() }
-            ?.firstOrNull { contentsMatch(it, candidate) }
-            ?: return null
+        val twin = try {
+            app.booksDir.listFiles()
+                ?.filter { it.isFile && it != candidate && it.extension.lowercase() != "tmp" && it.length() == candidate.length() }
+                ?.firstOrNull { contentsMatch(it, candidate) }
+                ?: return null
+        } catch (exception: Exception) {
+            Log.w(TAG, "Could not complete duplicate-file comparison", exception)
+            return null
+        }
         return app.bookDao.byFileName(twin.name)?.takeIf { it.deletedAt == null }
     }
 
@@ -110,6 +140,7 @@ class BookImporter(private val app: VellumApp) {
             }
         }
     } catch (e: Exception) {
+        Log.w(TAG, "Could not inspect ZIP container ${file.name}; trying EPUB", e)
         "epub"
     }
 
@@ -119,6 +150,7 @@ class BookImporter(private val app: VellumApp) {
             if (cursor.moveToFirst()) cursor.getString(0)?.substringBeforeLast('.') else null
         }
     } catch (e: Exception) {
+        Log.w(TAG, "Could not read the shared file's display name", e)
         null
     }
 
@@ -147,26 +179,27 @@ class BookImporter(private val app: VellumApp) {
     /** CBZ/CBR: title from the source name, cover from the first page. */
     private suspend fun registerComic(file: File, suggestedTitle: String?): BookEntity? {
         val format = file.extension.lowercase()
+        var source: app.vellum.reader.comic.ComicSource? = null
+        var store: ComicPageStore? = null
         val cover: Bitmap? = try {
-            val source = if (format == "cbr") CbrComicSource(file) else CbzComicSource(file)
+            source = if (format == "cbr") CbrComicSource(file) else CbzComicSource(file)
             if (source.pageCount == 0) {
-                source.close()
                 return null
             }
-            val store = ComicPageStore(source)
-            val bitmap = store.page(0, 400)
-            store.close()
-            bitmap
+            store = ComicPageStore(source)
+            store.page(0, 400)
         } catch (e: Exception) {
             Log.e(TAG, "Comic registration failed for ${file.name}", e)
             return null
+        } finally {
+            if (store != null) store.close() else source?.close()
         }
         val now = System.currentTimeMillis()
         val uuid = UUID.randomUUID().toString()
         val book = BookEntity(
             uuid = uuid,
             title = suggestedTitle?.takeIf { it.isNotBlank() && !it.looksLikeUuid() } ?: "Untitled comic",
-            author = "Comic",
+            author = "Unknown author",
             fileName = file.name,
             format = format,
             coverPath = saveCover(uuid, cover),
@@ -184,21 +217,23 @@ class BookImporter(private val app: VellumApp) {
 
     /** PDFs: title from the source name, cover from page one, no text index. */
     private suspend fun registerPdf(file: File, suggestedTitle: String?): BookEntity? {
+        var renderer: PdfPageRenderer? = null
         val cover: Bitmap? = try {
-            val renderer = PdfPageRenderer(file)
+            renderer = PdfPageRenderer(file)
             val bitmap = if (renderer.pageCount > 0) renderer.renderPage(0, 400) else null
-            renderer.close()
             bitmap
         } catch (e: Exception) {
             Log.e(TAG, "PDF registration failed for ${file.name}", e)
             return null // unreadable PDF — don't register it
+        } finally {
+            renderer?.close()
         }
         val now = System.currentTimeMillis()
         val uuid = UUID.randomUUID().toString()
         val book = BookEntity(
             uuid = uuid,
             title = suggestedTitle?.takeIf { it.isNotBlank() && !it.looksLikeUuid() } ?: "Untitled PDF",
-            author = "PDF",
+            author = "Unknown author",
             fileName = file.name,
             format = "pdf",
             coverPath = saveCover(uuid, cover),
@@ -240,8 +275,17 @@ class BookImporter(private val app: VellumApp) {
                 deletedAt = null,
                 lastOpenedAt = null,
             )
-            app.bookDao.upsert(book)
-            if (!isComic) indexFullText(uuid, opened)
+            val rows = if (isComic) emptyList() else fullTextRows(uuid, opened)
+            try {
+                app.database.withTransaction {
+                    app.bookDao.upsert(book)
+                    if (!isComic) app.searchDao.replaceForBook(uuid, rows)
+                }
+            } catch (e: Exception) {
+                book.coverPath?.let { File(it).delete() }
+                Log.e(TAG, "EPUB registration transaction failed for ${file.name}", e)
+                return null
+            }
             return book
         } finally {
             opened.close()
@@ -279,29 +323,33 @@ class BookImporter(private val app: VellumApp) {
                     }
                 }
                 "pdf" -> if (needsCover) {
+                    var renderer: PdfPageRenderer? = null
                     try {
-                        val renderer = PdfPageRenderer(file)
+                        renderer = PdfPageRenderer(file)
                         val cover = if (renderer.pageCount > 0) renderer.renderPage(0, 400) else null
-                        renderer.close()
                         saveCover(book.uuid, cover)?.let {
                             app.bookDao.setCover(book.uuid, it, System.currentTimeMillis())
                         }
                     } catch (e: Exception) {
-                        // Unreadable now; the next scan retries.
+                        Log.e(TAG, "PDF asset repair failed for ${file.name}", e)
+                    } finally {
+                        renderer?.close()
                     }
                 }
                 "cbz", "cbr" -> if (needsCover) {
+                    var store: ComicPageStore? = null
                     try {
-                        val store = ComicPageStore(
+                        store = ComicPageStore(
                             if (book.format == "cbr") CbrComicSource(file) else CbzComicSource(file),
                         )
                         val cover = store.page(0, 400)
-                        store.close()
                         saveCover(book.uuid, cover)?.let {
                             app.bookDao.setCover(book.uuid, it, System.currentTimeMillis())
                         }
                     } catch (e: Exception) {
-                        // Unreadable now; the next scan retries.
+                        Log.e(TAG, "Comic asset repair failed for ${file.name}", e)
+                    } finally {
+                        store?.close()
                     }
                 }
             }
@@ -310,11 +358,12 @@ class BookImporter(private val app: VellumApp) {
 
     private fun saveCover(bookUuid: String, cover: Bitmap?): String? {
         if (cover == null) return null
-        val file = File(app.coversDir, "$bookUuid.png")
+        val file = File(app.coversDir, "$bookUuid.webp")
         return try {
-            file.outputStream().use { cover.compress(Bitmap.CompressFormat.PNG, 90, it) }
+            file.outputStream().use { cover.compress(Bitmap.CompressFormat.WEBP_LOSSY, 84, it) }
             file.absolutePath
         } catch (e: Exception) {
+            Log.e(TAG, "Could not save cover for $bookUuid", e)
             file.delete()
             null
         }
@@ -326,12 +375,15 @@ class BookImporter(private val app: VellumApp) {
      * in the body maps 1:1 onto a reader locator.
      */
     private suspend fun indexFullText(bookUuid: String, opened: OpenedEpub) {
-        app.searchDao.deleteForBook(bookUuid)
+        app.searchDao.replaceForBook(bookUuid, fullTextRows(bookUuid, opened))
+    }
+
+    private suspend fun fullTextRows(bookUuid: String, opened: OpenedEpub): List<BookTextFts> = buildList {
         for (chapter in 0 until opened.chapterCount) {
             val html = opened.chapterHtml(chapter) ?: continue
             val body = HtmlBlockParser.parse(html).joinToString("") { it.text.text }
             if (body.isNotBlank()) {
-                app.searchDao.insertChapterText(BookTextFts(bookUuid, chapter.toString(), body))
+                add(BookTextFts(bookUuid, chapter.toString(), body))
             }
         }
     }
