@@ -4,6 +4,9 @@
     <!-- User-initiated dictionary/Wikipedia lookups, voice-pack downloads, and
          opt-in ElevenLabs cloud narration. No analytics or content tracking. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <application
         android:name=".VellumApp"

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -100,8 +101,9 @@ fun NotesScreen(onOpenPassage: (bookUuid: String, chapter: Int, offset: Int) -> 
             }
             return@Scaffold
         }
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.widthIn(max = 920.dp).fillMaxWidth().fillMaxHeight().align(Alignment.TopCenter),
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -133,6 +135,7 @@ fun NotesScreen(onOpenPassage: (bookUuid: String, chapter: Int, offset: Int) -> 
                     }
                 }
             }
+        }
         }
     }
 }

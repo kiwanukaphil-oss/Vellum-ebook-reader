@@ -1,33 +1,55 @@
 package app.vellum.reader.library
 
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.withTransaction
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookCollectionCrossRef
 import app.vellum.reader.core.data.BookEntity
+import app.vellum.reader.core.data.BookGenreCrossRef
 import app.vellum.reader.core.data.BookTagCrossRef
 import app.vellum.reader.core.data.CollectionEntity
+import app.vellum.reader.core.data.GenreEntity
 import app.vellum.reader.core.data.TagEntity
 import app.vellum.reader.sync.SyncEngine
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 enum class ShelfSort(val label: String) {
     RECENT("Recently read"),
     TITLE("Title"),
     AUTHOR("Author"),
     SERIES("Series"),
+}
+
+enum class LibraryGroup(val label: String, val description: String) {
+    CATEGORY("Category", "Fiction, Non-fiction, Comics…"),
+    GENRE("Genre", "Romance, History, Science…"),
+    SERIES("Series", "Keep volumes together"),
+    AUTHOR("Author", "Alphabetical by surname"),
+    NONE("None", "One uninterrupted grid"),
+}
+
+enum class LibraryTab { BROWSE, ALL_BOOKS, COLLECTIONS }
+
+object BookCategories {
+    const val FICTION = "Fiction"
+    const val NON_FICTION = "Non-fiction"
+    const val COMICS = "Comics & Manga"
+    const val ESSAYS = "Essays & Poetry"
+
+    val all = listOf(FICTION, NON_FICTION, COMICS, ESSAYS)
 }
 
 sealed interface ShelfFilter {
@@ -37,25 +59,38 @@ sealed interface ShelfFilter {
 }
 
 data class LibraryState(
+    /** Every live book, used by Browse counts and collections. */
+    val allBooks: List<BookEntity> = emptyList(),
+    /** Current filtered and sorted All-books result. */
     val books: List<BookEntity> = emptyList(),
     val collections: List<CollectionEntity> = emptyList(),
     val tags: List<TagEntity> = emptyList(),
-    /** bookUuid → collection uuids / tag uuids the book belongs to. */
+    val genres: List<GenreEntity> = emptyList(),
     val collectionsByBook: Map<String, Set<String>> = emptyMap(),
     val tagsByBook: Map<String, Set<String>> = emptyMap(),
+    val genresByBook: Map<String, Set<String>> = emptyMap(),
     val sort: ShelfSort = ShelfSort.RECENT,
     val filter: ShelfFilter = ShelfFilter.All,
+    val categoryFilter: String? = null,
+    val genreFilterUuid: String? = null,
+    val needsCategoryOnly: Boolean = false,
+    val groupBy: LibraryGroup = LibraryGroup.CATEGORY,
     val importing: Boolean = false,
-)
+) {
+    val genresById: Map<String, GenreEntity> get() = genres.associateBy { it.uuid }
+    val uncategorizedCount: Int get() = allBooks.count { it.category == null }
+}
 
 class LibraryViewModel(private val app: VellumApp) : ViewModel() {
-
     private val importer = BookImporter(app)
     private val sort = MutableStateFlow(ShelfSort.RECENT)
     private val filter = MutableStateFlow<ShelfFilter>(ShelfFilter.All)
+    private val categoryFilter = MutableStateFlow<String?>(null)
+    private val genreFilterUuid = MutableStateFlow<String?>(null)
+    private val needsCategoryOnly = MutableStateFlow(false)
+    private val groupBy = MutableStateFlow(LibraryGroup.CATEGORY)
     private val importing = MutableStateFlow(false)
 
-    /** Selection mode: non-empty = the shelf is in multi-select. */
     private val _selected = MutableStateFlow<Set<String>>(emptySet())
     val selected: StateFlow<Set<String>> = _selected
 
@@ -65,12 +100,18 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
         app.collectionDao.observeTags(),
         app.collectionDao.observeBookCollections(),
         app.collectionDao.observeBookTags(),
+        app.collectionDao.observeGenres(),
+        app.collectionDao.observeBookGenres(),
         sort,
         filter,
+        categoryFilter,
+        genreFilterUuid,
+        needsCategoryOnly,
+        groupBy,
         importing,
     ) { values ->
         @Suppress("UNCHECKED_CAST")
-        val books = values[0] as List<BookEntity>
+        val allBooks = values[0] as List<BookEntity>
         @Suppress("UNCHECKED_CAST")
         val collections = values[1] as List<CollectionEntity>
         @Suppress("UNCHECKED_CAST")
@@ -79,73 +120,109 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
         val bookCollections = values[3] as List<BookCollectionCrossRef>
         @Suppress("UNCHECKED_CAST")
         val bookTags = values[4] as List<BookTagCrossRef>
-        val sortMode = values[5] as ShelfSort
-        val filterMode = values[6] as ShelfFilter
+        @Suppress("UNCHECKED_CAST")
+        val genres = values[5] as List<GenreEntity>
+        @Suppress("UNCHECKED_CAST")
+        val bookGenres = values[6] as List<BookGenreCrossRef>
+        val sortMode = values[7] as ShelfSort
+        val legacyFilter = values[8] as ShelfFilter
+        val category = values[9] as String?
+        val genreUuid = values[10] as String?
+        val needsCategory = values[11] as Boolean
+        val grouping = values[12] as LibraryGroup
 
         val collectionsByBook = bookCollections.groupBy({ it.bookUuid }, { it.collectionUuid })
             .mapValues { it.value.toSet() }
         val tagsByBook = bookTags.groupBy({ it.bookUuid }, { it.tagUuid })
             .mapValues { it.value.toSet() }
+        val genresByBook = bookGenres.groupBy({ it.bookUuid }, { it.genreUuid })
+            .mapValues { it.value.toSet() }
 
-        val filtered = when (filterMode) {
-            is ShelfFilter.All -> books
-            is ShelfFilter.InCollection ->
-                books.filter { filterMode.collectionUuid in collectionsByBook[it.uuid].orEmpty() }
-            is ShelfFilter.WithTag ->
-                books.filter { filterMode.tagUuid in tagsByBook[it.uuid].orEmpty() }
+        val filtered = allBooks.filter { book ->
+            val legacyMatch = when (legacyFilter) {
+                ShelfFilter.All -> true
+                is ShelfFilter.InCollection -> legacyFilter.collectionUuid in collectionsByBook[book.uuid].orEmpty()
+                is ShelfFilter.WithTag -> legacyFilter.tagUuid in tagsByBook[book.uuid].orEmpty()
+            }
+            legacyMatch &&
+                (!needsCategory || book.category == null) &&
+                (category == null || book.category == category) &&
+                (genreUuid == null || genreUuid in genresByBook[book.uuid].orEmpty())
         }
         val sorted = when (sortMode) {
-            ShelfSort.RECENT -> filtered // shelf query already orders by lastOpenedAt
+            ShelfSort.RECENT -> filtered
             ShelfSort.TITLE -> filtered.sortedBy { it.title.lowercase() }
             ShelfSort.AUTHOR -> filtered.sortedBy { it.author.lowercase() }
             ShelfSort.SERIES -> filtered.sortedWith(
-                compareBy({ it.seriesName ?: "￿" }, { it.seriesIndex ?: Float.MAX_VALUE }, { it.title }),
+                compareBy({ it.seriesName ?: "\uFFFF" }, { it.seriesIndex ?: Float.MAX_VALUE }, { it.title }),
             )
         }
+
         LibraryState(
+            allBooks = allBooks,
             books = sorted,
             collections = collections,
             tags = tags,
+            genres = genres,
             collectionsByBook = collectionsByBook,
             tagsByBook = tagsByBook,
+            genresByBook = genresByBook,
             sort = sortMode,
-            filter = filterMode,
-            importing = values[7] as Boolean,
+            filter = legacyFilter,
+            categoryFilter = category,
+            genreFilterUuid = genreUuid,
+            needsCategoryOnly = needsCategory,
+            groupBy = grouping,
+            importing = values[13] as Boolean,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryState())
 
-    /** Human-readable line for the sync sheet ("Synced · 2 pulled" etc.). */
     val syncStatus = MutableStateFlow<String?>(null)
     val syncing = MutableStateFlow(false)
 
     init {
         viewModelScope.launch {
             app.bookDao.observeShelf().collect { books ->
-                val liveUuids = books.mapTo(mutableSetOf()) { it.uuid }
-                _selected.value = _selected.value.intersect(liveUuids)
+                _selected.value = _selected.value.intersect(books.mapTo(mutableSetOf()) { it.uuid })
             }
         }
+        viewModelScope.launch { ensureDefaultGenres() }
         viewModelScope.launch {
-            // Let the first shelf frame render before asset scanning and folder
-            // sync contend for storage/Room on a cold start.
             delay(600)
             importer.scanDropFolder()
-            val settings = app.settingsStore.settings.first()
-            settings.syncFolderUri?.let { syncNow(it) }
+            app.settingsStore.settings.first().syncFolderUri?.let(::syncNow)
         }
     }
 
-    /** Runs a full folder sync and repairs any assets pulled books need. */
+    private suspend fun ensureDefaultGenres() {
+        val existing = app.collectionDao.allGenresRaw()
+            .filter { it.deletedAt == null }
+            .map { it.name.lowercase() }
+            .toSet()
+        val now = System.currentTimeMillis()
+        DEFAULT_GENRES.filter { it.lowercase() !in existing }.forEach { name ->
+            app.collectionDao.upsertGenre(
+                GenreEntity(
+                    uuid = UUID.nameUUIDFromBytes("vellum-genre:$name".toByteArray()).toString(),
+                    name = name,
+                    createdAt = now,
+                    updatedAt = now,
+                    deletedAt = null,
+                ),
+            )
+        }
+    }
+
     fun syncNow(folderUri: String) {
         if (syncing.value) return
         viewModelScope.launch {
             syncing.value = true
             syncStatus.value = "Syncing…"
             try {
-                val result = SyncEngine(app).sync(android.net.Uri.parse(folderUri))
+                val result = SyncEngine(app).sync(Uri.parse(folderUri))
                 if (result.error != null) {
-                    android.util.Log.e("VellumSync", "Sync failed: ${result.error}")
-                    syncStatus.value = "Couldn't sync — check that the folder still exists and this device can reach it."
+                    Log.e("VellumSync", "Sync failed: ${result.error}")
+                    syncStatus.value = "Couldn't sync — check that the folder is still accessible."
                 } else {
                     importer.ensureAssets()
                     app.settingsStore.setLastSyncAt(System.currentTimeMillis())
@@ -161,31 +238,109 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
         }
     }
 
-    /** Called when the sync sheet closes so stale results don't linger. */
-    fun clearSyncStatus() {
-        if (!syncing.value) syncStatus.value = null
+    fun clearSyncStatus() { if (!syncing.value) syncStatus.value = null }
+    fun setSort(mode: ShelfSort) { sort.value = mode }
+    fun setGroupBy(group: LibraryGroup) { groupBy.value = group }
+
+    fun showCategory(category: String?) {
+        categoryFilter.value = category
+        genreFilterUuid.value = null
+        needsCategoryOnly.value = false
+        filter.value = ShelfFilter.All
+        groupBy.value = if (category == null) LibraryGroup.CATEGORY else LibraryGroup.GENRE
     }
 
-    fun setSort(mode: ShelfSort) {
-        sort.value = mode
+    fun showGenre(uuid: String?) {
+        categoryFilter.value = null
+        genreFilterUuid.value = uuid
+        needsCategoryOnly.value = false
+        filter.value = ShelfFilter.All
+        if (uuid != null) groupBy.value = LibraryGroup.CATEGORY
+    }
+
+    fun showNeedsCategory() {
+        categoryFilter.value = null
+        genreFilterUuid.value = null
+        needsCategoryOnly.value = true
+        filter.value = ShelfFilter.All
+        groupBy.value = LibraryGroup.NONE
+    }
+
+    fun clearLibraryFilters() {
+        categoryFilter.value = null
+        genreFilterUuid.value = null
+        needsCategoryOnly.value = false
+        filter.value = ShelfFilter.All
     }
 
     fun toggleSelection(uuid: String) {
         _selected.value = _selected.value.let { if (uuid in it) it - uuid else it + uuid }
     }
-
-    fun clearSelection() {
-        _selected.value = emptySet()
-    }
+    fun clearSelection() { _selected.value = emptySet() }
 
     fun deleteBooks(uuids: Set<String>) {
         clearSelection()
+        viewModelScope.launch { uuids.mapNotNull { app.bookDao.byUuid(it) }.forEach { deleteBookNow(it) } }
+    }
+
+    fun setCategoryForBooks(category: String?, bookUuids: Set<String>) {
         viewModelScope.launch {
-            uuids.mapNotNull { app.bookDao.byUuid(it) }.forEach { deleteBookNow(it) }
+            val now = System.currentTimeMillis()
+            app.database.withTransaction {
+                bookUuids.forEach { app.bookDao.updateCategory(it, category, now) }
+            }
         }
     }
 
-    /** Adds or removes every book in [bookUuids] from a collection at once. */
+    fun setGenreForBooks(genreUuid: String, bookUuids: Set<String>, member: Boolean) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            app.database.withTransaction {
+                bookUuids.forEach { bookUuid ->
+                    app.collectionDao.upsertBookGenre(
+                        BookGenreCrossRef(bookUuid, genreUuid, now, if (member) null else now),
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateClassification(bookUuid: String, category: String?, genreUuids: Set<String>) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val knownGenreUuids = state.value.genres.mapTo(mutableSetOf()) { it.uuid }
+            knownGenreUuids += state.value.genresByBook[bookUuid].orEmpty()
+            app.database.withTransaction {
+                app.bookDao.updateCategory(bookUuid, category, now)
+                knownGenreUuids.forEach { genreUuid ->
+                    app.collectionDao.upsertBookGenre(
+                        BookGenreCrossRef(
+                            bookUuid = bookUuid,
+                            genreUuid = genreUuid,
+                            updatedAt = now,
+                            deletedAt = if (genreUuid in genreUuids) null else now,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun createGenre(name: String, assignToBooks: Collection<String>) {
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) return
+        viewModelScope.launch {
+            val existing = state.value.genres.firstOrNull { it.name.equals(cleanName, ignoreCase = true) }
+            val now = System.currentTimeMillis()
+            val genre = existing ?: GenreEntity(UUID.randomUUID().toString(), cleanName, now, now, null).also {
+                app.collectionDao.upsertGenre(it)
+            }
+            assignToBooks.forEach {
+                app.collectionDao.upsertBookGenre(BookGenreCrossRef(it, genre.uuid, now, null))
+            }
+        }
+    }
+
     fun setCollectionForBooks(collectionUuid: String, bookUuids: Set<String>, member: Boolean) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
@@ -201,25 +356,30 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
             bookUuids.forEach { bookUuid ->
-                app.collectionDao.upsertBookTag(
-                    BookTagCrossRef(bookUuid, tagUuid, now, if (member) null else now),
-                )
+                app.collectionDao.upsertBookTag(BookTagCrossRef(bookUuid, tagUuid, now, if (member) null else now))
             }
         }
     }
 
-    fun setFilter(newFilter: ShelfFilter) {
-        filter.value = newFilter
-    }
+    fun setFilter(newFilter: ShelfFilter) { filter.value = newFilter }
 
-    fun importEpub(uri: Uri) {
+    fun importEpub(uri: Uri) = importBooks(listOf(uri))
+
+    /** Imports a picker selection in order, keeping one reliable progress state. */
+    fun importBooks(uris: List<Uri>) {
+        val uniqueUris = uris.distinct()
+        if (uniqueUris.isEmpty()) return
         viewModelScope.launch {
             importing.value = true
             try {
-                importer.importFromUri(uri)
-            } catch (e: Exception) {
-                android.util.Log.e("VellumImport", "Picker import failed for $uri", e)
-                app.importNotices.tryEmit("Couldn't import that file")
+                uniqueUris.forEach { uri ->
+                    try {
+                        importer.importFromUri(uri)
+                    } catch (exception: Exception) {
+                        Log.e("VellumImport", "Picker import failed for $uri", exception)
+                        app.importNotices.tryEmit("Couldn't import one of the selected files")
+                    }
+                }
             } finally {
                 importing.value = false
             }
@@ -240,18 +400,15 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
     }
 
     fun toggleCollection(bookUuid: String, collectionUuid: String, isMember: Boolean) {
-        viewModelScope.launch {
-            val now = System.currentTimeMillis()
-            app.collectionDao.upsertBookCollection(
-                BookCollectionCrossRef(bookUuid, collectionUuid, now, if (isMember) now else null),
-            )
-        }
+        setCollectionForBooks(collectionUuid, setOf(bookUuid), !isMember)
     }
 
     fun createCollection(name: String, assignToBooks: Collection<String>) {
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) return
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val collection = CollectionEntity(UUID.randomUUID().toString(), name.trim(), now, now, null)
+            val collection = CollectionEntity(UUID.randomUUID().toString(), cleanName, now, now, null)
             app.collectionDao.upsertCollection(collection)
             assignToBooks.forEach {
                 app.collectionDao.upsertBookCollection(BookCollectionCrossRef(it, collection.uuid, now, null))
@@ -260,33 +417,21 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
     }
 
     fun toggleTag(bookUuid: String, tagUuid: String, isMember: Boolean) {
-        viewModelScope.launch {
-            val now = System.currentTimeMillis()
-            app.collectionDao.upsertBookTag(BookTagCrossRef(bookUuid, tagUuid, now, if (isMember) now else null))
-        }
+        setTagForBooks(tagUuid, setOf(bookUuid), !isMember)
     }
 
     fun createTag(name: String, assignToBooks: Collection<String>) {
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) return
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val tag = TagEntity(UUID.randomUUID().toString(), name.trim(), now, now, null)
+            val tag = TagEntity(UUID.randomUUID().toString(), cleanName, now, now, null)
             app.collectionDao.upsertTag(tag)
-            assignToBooks.forEach {
-                app.collectionDao.upsertBookTag(BookTagCrossRef(it, tag.uuid, now, null))
-            }
+            assignToBooks.forEach { app.collectionDao.upsertBookTag(BookTagCrossRef(it, tag.uuid, now, null)) }
         }
     }
 
-    /**
-     * Tombstones the row (sync-ready) and removes everything local: file,
-     * cover, search index, reading position, annotations, and PDF ink.
-     * Never touches the original file the book was imported from.
-     */
-    fun deleteBook(book: BookEntity) {
-        viewModelScope.launch {
-            deleteBookNow(book)
-        }
-    }
+    fun deleteBook(book: BookEntity) { viewModelScope.launch { deleteBookNow(book) } }
 
     private suspend fun deleteBookNow(book: BookEntity) {
         val now = System.currentTimeMillis()
@@ -296,9 +441,19 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
             app.annotationDao.softDeleteForBook(book.uuid, now)
             app.pdfStrokeDao.softDeleteForBook(book.uuid, now)
             app.comicPanelDao.softDeleteForBook(book.uuid, now)
+            app.collectionDao.softDeleteGenresForBook(book.uuid, now)
             app.searchDao.deleteForBook(book.uuid)
         }
         File(app.booksDir, book.fileName).delete()
         book.coverPath?.let { File(it).delete() }
+    }
+
+    private companion object {
+        val DEFAULT_GENRES = listOf(
+            "Biography & Memoir", "Classics", "Essays", "Fantasy", "Graphic Memoir",
+            "Graphic Novel", "Historical", "History", "Literary", "Mystery & Thriller",
+            "Nature", "Philosophy", "Poetry", "Romance", "Science", "Science Fiction",
+            "Society & Politics",
+        )
     }
 }

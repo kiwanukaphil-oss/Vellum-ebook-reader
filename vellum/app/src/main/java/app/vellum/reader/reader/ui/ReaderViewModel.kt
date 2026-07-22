@@ -28,6 +28,7 @@ import app.vellum.reader.reader.tts.ElevenLabsSubscription
 import app.vellum.reader.reader.tts.ElevenLabsVoice
 import app.vellum.reader.reader.tts.KokoroEngine
 import app.vellum.reader.reader.tts.KokoroVoicePack
+import app.vellum.reader.reader.layout.ReaderPage
 import kotlinx.coroutines.isActive
 import app.vellum.reader.core.session.ActiveReadingSession
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +62,19 @@ data class ReturnAnchor(val chapterIndex: Int, val charOffset: Int)
 data class SelectionRange(val startChar: Int, val endChar: Int)
 
 enum class TtsStatus { OFF, PREPARING, PLAYING, PAUSED }
+
+/** True only after narration has moved beyond every page currently on screen. */
+internal fun narrationHasLeftVisiblePages(
+    pages: List<ReaderPage>,
+    firstVisiblePage: Int,
+    visiblePageCount: Int,
+    characterOffset: Int,
+): Boolean {
+    if (visiblePageCount <= 0 || pages.isEmpty()) return false
+    val lastVisiblePage = (firstVisiblePage + visiblePageCount - 1).coerceAtMost(pages.lastIndex)
+    val visibleEnd = pages.getOrNull(lastVisiblePage)?.endChar ?: return false
+    return characterOffset >= visibleEnd
+}
 
 /** Sleep timer choices, cycled from the TTS bar. */
 enum class TtsSleep(val label: String, val compactLabel: String, val minutes: Int?) {
@@ -342,6 +356,15 @@ class ReaderViewModel(
             } finally {
                 turning = false
             }
+        }
+    }
+
+    /** Keeps narration within a visible spread; turns only after its final page. */
+    private fun syncPageToNarration(characterOffset: Int) {
+        val state = _ui.value
+        val pages = paginatedCache[state.chapterIndex]?.pages ?: return
+        if (narrationHasLeftVisiblePages(pages, state.pageIndex, spreadSize, characterOffset)) {
+            nextPage()
         }
     }
 
@@ -764,8 +787,7 @@ class ReaderViewModel(
                 withContext(Dispatchers.Main) {
                     if (ttsStatus.value == TtsStatus.PREPARING) ttsStatus.value = TtsStatus.PLAYING
                     ttsRange.value = SelectionRange(base, base + length)
-                    val page = currentPage()
-                    if (page != null && base >= page.endChar) nextPage()
+                    syncPageToNarration(base)
                 }
                 if (!engine.playBlocking(pcm, session)) {
                     producer.cancel()
@@ -861,9 +883,16 @@ class ReaderViewModel(
                         if (range != lastRange) {
                             lastRange = range
                             ttsRange.value = range
-                            val page = currentPage()
-                            if (page != null && range.startChar >= page.endChar) {
-                                viewModelScope.launch(Dispatchers.Main) { nextPage() }
+                            if (narrationHasLeftVisiblePages(
+                                    paginatedCache[_ui.value.chapterIndex]?.pages.orEmpty(),
+                                    _ui.value.pageIndex,
+                                    spreadSize,
+                                    range.startChar,
+                                )
+                            ) {
+                                viewModelScope.launch(Dispatchers.Main) {
+                                    syncPageToNarration(range.startChar)
+                                }
                             }
                         }
                     }
@@ -1313,8 +1342,7 @@ class ReaderViewModel(
                 viewModelScope.launch {
                     ttsRange.value = SelectionRange(base + start, base + end)
                     // Speech has crossed the page boundary — turn with it.
-                    val page = currentPage() ?: return@launch
-                    if (base + start >= page.endChar) nextPage()
+                    syncPageToNarration(base + start)
                 }
             }
 

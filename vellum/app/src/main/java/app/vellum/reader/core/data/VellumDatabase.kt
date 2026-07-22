@@ -17,9 +17,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BookCollectionCrossRef::class,
         TagEntity::class,
         BookTagCrossRef::class,
+        GenreEntity::class,
+        BookGenreCrossRef::class,
         BookTextFts::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class VellumDatabase : RoomDatabase() {
@@ -32,6 +34,29 @@ abstract class VellumDatabase : RoomDatabase() {
     abstract fun sessionDao(): SessionDao
 
     companion object {
+        /** v7 -> v8: primary categories and reusable, overlapping genres. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `books` ADD COLUMN `category` TEXT")
+                db.execSQL(
+                    "UPDATE `books` SET `category` = 'Comics & Manga' " +
+                        "WHERE `format` IN ('cbz', 'cbr', 'comic-epub')",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `genres` (`uuid` TEXT NOT NULL, `name` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `deletedAt` INTEGER, " +
+                        "PRIMARY KEY(`uuid`))",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `book_genres` (`bookUuid` TEXT NOT NULL, `genreUuid` TEXT NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, `deletedAt` INTEGER, PRIMARY KEY(`bookUuid`, `genreUuid`))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_book_genres_genreUuid` ON `book_genres` (`genreUuid`)",
+                )
+            }
+        }
+
         /** v6 -> v7: indices for high-frequency per-book child lookups. */
         val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {

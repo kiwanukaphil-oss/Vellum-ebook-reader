@@ -13,7 +13,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
@@ -23,6 +27,8 @@ import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,6 +37,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -131,29 +139,49 @@ private fun VellumNavHost() {
     // destinations receive no phantom bottom padding.
     SharedTransitionLayout {
     CompositionLocalProvider(LocalSharedTransitionScope provides this@SharedTransitionLayout) {
-    Scaffold(
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        bottomBar = {
-            if (Tabs.any { it.route == currentRoute }) {
-                NavigationBar {
-                    Tabs.forEach { tab ->
-                        NavigationBarItem(
-                            selected = currentRoute == tab.route,
-                            onClick = {
-                                navController.navigate(tab.route) {
-                                    popUpTo("library") { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = { Icon(tab.icon, contentDescription = null) },
-                            label = { Text(tab.label) },
-                        )
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val topLevel = Tabs.any { it.route == currentRoute }
+    val useNavigationRail = topLevel && maxWidth >= 600.dp
+    val navigateToTab: (VellumTab) -> Unit = { tab ->
+        navController.navigate(tab.route) {
+            popUpTo("library") { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+    Row(modifier = Modifier.fillMaxSize()) {
+        if (useNavigationRail) {
+            NavigationRail {
+                Spacer(Modifier.weight(1f))
+                Tabs.forEach { tab ->
+                    NavigationRailItem(
+                        selected = currentRoute == tab.route,
+                        onClick = { navigateToTab(tab) },
+                        icon = { Icon(tab.icon, contentDescription = null) },
+                        label = { Text(tab.label) },
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+            }
+        }
+        Scaffold(
+            modifier = Modifier.weight(1f),
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            bottomBar = {
+                if (topLevel && !useNavigationRail) {
+                    NavigationBar {
+                        Tabs.forEach { tab ->
+                            NavigationBarItem(
+                                selected = currentRoute == tab.route,
+                                onClick = { navigateToTab(tab) },
+                                icon = { Icon(tab.icon, contentDescription = null) },
+                                label = { Text(tab.label) },
+                            )
+                        }
                     }
                 }
-            }
-        },
-    ) { padding ->
+            },
+        ) { padding ->
         NavHost(
             navController = navController,
             startDestination = "library",
@@ -252,6 +280,8 @@ private fun VellumNavHost() {
                 }
             }
         }
+        }
+    }
     }
     }
     }

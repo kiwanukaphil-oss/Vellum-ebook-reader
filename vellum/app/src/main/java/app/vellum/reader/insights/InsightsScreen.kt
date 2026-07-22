@@ -1,11 +1,14 @@
 package app.vellum.reader.insights
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -25,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -128,8 +132,9 @@ fun InsightsScreen(onBack: (() -> Unit)? = null) {
             )
         },
     ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth().fillMaxHeight().align(Alignment.TopCenter),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
@@ -198,6 +203,7 @@ fun InsightsScreen(onBack: (() -> Unit)? = null) {
                     )
                 }
             }
+        }
         }
     }
 }

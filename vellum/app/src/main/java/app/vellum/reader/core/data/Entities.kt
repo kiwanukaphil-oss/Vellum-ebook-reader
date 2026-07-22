@@ -17,6 +17,8 @@ data class BookEntity(
     /** File name inside the app-private books directory. */
     val fileName: String,
     val format: String,
+    /** Broad, singular library home. Null means the book needs classification. */
+    val category: String?,
     /** Absolute path of the extracted cover image, if the EPUB embeds one. */
     val coverPath: String?,
     val seriesName: String?,
@@ -144,6 +146,29 @@ data class TagEntity(
 data class BookTagCrossRef(
     val bookUuid: String,
     val tagUuid: String,
+    val updatedAt: Long,
+    val deletedAt: Long?,
+)
+
+/** A reusable semantic genre. Unlike personal collections, genres describe content. */
+@Entity(tableName = "genres")
+data class GenreEntity(
+    @PrimaryKey val uuid: String,
+    val name: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val deletedAt: Long?,
+)
+
+/** Many-to-many because a historical romance belongs on both genre shelves. */
+@Entity(
+    tableName = "book_genres",
+    primaryKeys = ["bookUuid", "genreUuid"],
+    indices = [Index("genreUuid")],
+)
+data class BookGenreCrossRef(
+    val bookUuid: String,
+    val genreUuid: String,
     val updatedAt: Long,
     val deletedAt: Long?,
 )

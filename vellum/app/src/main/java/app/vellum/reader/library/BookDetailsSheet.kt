@@ -47,7 +47,12 @@ fun BookDetailsSheet(
     var author by remember(book.uuid) { mutableStateOf(book.author) }
     var seriesName by remember(book.uuid) { mutableStateOf(book.seriesName ?: "") }
     var seriesIndex by remember(book.uuid) { mutableStateOf(book.seriesIndex?.toString() ?: "") }
+    var category by remember(book.uuid) { mutableStateOf(book.category) }
+    var genreUuids by remember(book.uuid) {
+        mutableStateOf(state.genresByBook[book.uuid].orEmpty())
+    }
     var newCollection by remember { mutableStateOf("") }
+    var newGenre by remember { mutableStateOf("") }
     var newTag by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -77,6 +82,67 @@ fun BookDetailsSheet(
                     modifier = Modifier.width(80.dp),
                 )
             }
+
+            Text("Primary category", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Choose one broad home for this book.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                BookCategories.all.forEach { option ->
+                    FilterChip(
+                        selected = category == option,
+                        onClick = { category = option },
+                        label = { Text(option) },
+                    )
+                }
+            }
+
+            Text("Genres", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Add as many useful ways to find it as you need.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                state.genres.forEach { genre ->
+                    FilterChip(
+                        selected = genre.uuid in genreUuids,
+                        onClick = {
+                            genreUuids = if (genre.uuid in genreUuids) {
+                                genreUuids - genre.uuid
+                            } else {
+                                genreUuids + genre.uuid
+                            }
+                        },
+                        label = { Text(genre.name) },
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = newGenre,
+                    onValueChange = { newGenre = it },
+                    label = { Text("New genre") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        if (newGenre.isNotBlank()) {
+                            viewModel.createGenre(newGenre, emptyList())
+                            newGenre = ""
+                        }
+                    },
+                ) { Text("Create") }
+            }
             Button(
                 onClick = {
                     viewModel.updateMetadata(
@@ -84,6 +150,7 @@ fun BookDetailsSheet(
                         seriesName.ifBlank { null },
                         seriesIndex.toFloatOrNull(),
                     )
+                    viewModel.updateClassification(book.uuid, category, genreUuids)
                     onDismiss()
                 },
                 modifier = Modifier.align(Alignment.End),
@@ -120,7 +187,7 @@ fun BookDetailsSheet(
                 ) { Text("Add") }
             }
 
-            Text("Tags", style = MaterialTheme.typography.titleSmall)
+            Text("Personal tags", style = MaterialTheme.typography.titleSmall)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

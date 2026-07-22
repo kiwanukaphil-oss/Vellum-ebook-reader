@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -111,34 +112,60 @@ fun PdfReaderScreen(bookUuid: String, onBack: () -> Unit) {
         when {
             ui.loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             ui.error != null -> Text(ui.error!!, modifier = Modifier.align(Alignment.Center))
-            else -> {
-                val pagerState = rememberPagerState(initialPage = ui.startPage) { ui.pageCount }
-                LaunchedEffect(pagerState.currentPage) { viewModel.persistPage(pagerState.currentPage) }
+            else -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val spreadMode = maxWidth >= 840.dp
+                val pagerState = rememberPagerState(
+                    initialPage = if (spreadMode) ui.startPage / 2 else ui.startPage,
+                ) { if (spreadMode) (ui.pageCount + 1) / 2 else ui.pageCount }
+                val leadingPage = if (spreadMode) pagerState.currentPage * 2 else pagerState.currentPage
+                LaunchedEffect(pagerState.currentPage, spreadMode) { viewModel.persistPage(leadingPage) }
 
                 HorizontalPager(
                     state = pagerState,
                     userScrollEnabled = !ui.markupMode,
                     modifier = Modifier.fillMaxSize(),
-                ) { pageIndex ->
-                    PdfPage(
-                        viewModel = viewModel,
-                        pageIndex = pageIndex,
-                        strokes = strokesByPage[pageIndex].orEmpty(),
-                        markupMode = ui.markupMode,
-                        markupColor = HighlightColors.byId(ui.markupColorId).color,
-                        invert = theme.isDark,
-                        onToggleChrome = viewModel::toggleChrome,
-                    )
+                ) { pagerPage ->
+                    val firstPage = if (spreadMode) pagerPage * 2 else pagerPage
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        PdfPage(
+                            viewModel = viewModel,
+                            pageIndex = firstPage,
+                            strokes = strokesByPage[firstPage].orEmpty(),
+                            markupMode = ui.markupMode,
+                            markupColor = HighlightColors.byId(ui.markupColorId).color,
+                            invert = theme.isDark,
+                            onToggleChrome = viewModel::toggleChrome,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (spreadMode) {
+                            val secondPage = firstPage + 1
+                            if (secondPage < ui.pageCount) {
+                                PdfPage(
+                                    viewModel = viewModel,
+                                    pageIndex = secondPage,
+                                    strokes = strokesByPage[secondPage].orEmpty(),
+                                    markupMode = ui.markupMode,
+                                    markupColor = HighlightColors.byId(ui.markupColorId).color,
+                                    invert = theme.isDark,
+                                    onToggleChrome = viewModel::toggleChrome,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            } else {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
                 }
 
                 PdfChrome(
                     ui = ui,
-                    currentPage = pagerState.currentPage,
+                    currentPage = leadingPage,
+                    spreadMode = spreadMode,
                     themeIsDark = theme.isDark,
                     onBack = onBack,
                     onToggleMarkup = { viewModel.setMarkupMode(!ui.markupMode) },
                     onColor = viewModel::setMarkupColor,
-                    onUndo = { viewModel.undoStroke(pagerState.currentPage) },
+                    onUndo = { viewModel.undoStroke(leadingPage) },
                 )
             }
         }
@@ -155,8 +182,9 @@ private fun PdfPage(
     markupColor: Color,
     invert: Boolean,
     onToggleChrome: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val widthPx = constraints.maxWidth
         var scale by remember(pageIndex) { mutableFloatStateOf(1f) }
         var pan by remember(pageIndex) { mutableStateOf(Offset.Zero) }
@@ -295,6 +323,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawInk(
 private fun PdfChrome(
     ui: PdfUiState,
     currentPage: Int,
+    spreadMode: Boolean,
     themeIsDark: Boolean,
     onBack: () -> Unit,
     onToggleMarkup: () -> Unit,
@@ -366,7 +395,11 @@ private fun PdfChrome(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             Text(
-                text = "Page ${currentPage + 1} of ${ui.pageCount}",
+                text = if (spreadMode && currentPage + 1 < ui.pageCount) {
+                    "Pages ${currentPage + 1}–${currentPage + 2} of ${ui.pageCount}"
+                } else {
+                    "Page ${currentPage + 1} of ${ui.pageCount}"
+                },
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier

@@ -46,12 +46,37 @@ class BookImporter(private val app: VellumApp) {
             app.importNotices.tryEmit("Couldn't read that file")
             return@withContext null
         }
+        importPreparedTemp(temp, displayNameFor(uri))
+    }
+
+    /**
+     * Imports a file produced by another trusted app component, such as the
+     * same-Wi-Fi receiver. Copying first lets the transfer cache be cleaned as
+     * soon as this method returns.
+     */
+    suspend fun importFromFile(source: File, suggestedTitle: String? = null): BookEntity? =
+        withContext(Dispatchers.IO) {
+            val temp = File(app.booksDir, "${UUID.randomUUID()}.tmp")
+            try {
+                source.inputStream().use { input ->
+                    temp.outputStream().use { output -> input.copyTo(output) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Import copy failed for ${source.name}", e)
+                temp.delete()
+                app.importNotices.tryEmit("Couldn't read the received file")
+                return@withContext null
+            }
+            importPreparedTemp(temp, suggestedTitle ?: source.nameWithoutExtension)
+        }
+
+    private suspend fun importPreparedTemp(temp: File, suggestedTitle: String?): BookEntity? {
         // Same-content dedup: re-sharing a file (or a rotation replaying the
         // launch intent) must not create a second library entry.
         alreadyImportedCopy(temp)?.let { existing ->
             temp.delete()
             app.importNotices.tryEmit("Already in your library: “${existing.title}”")
-            return@withContext existing
+            return existing
         }
         // Sniff the real format — file pickers often report octet-stream.
         val magic = temp.inputStream().use { stream ->
@@ -70,10 +95,10 @@ class BookImporter(private val app: VellumApp) {
         if (!moveIntoPlace(temp, target)) {
             temp.delete()
             app.importNotices.tryEmit("Couldn't store that file")
-            return@withContext null
+            return null
         }
-        val registered = registerFile(target, displayNameFor(uri))
-        if (registered == null) {
+        val registered = registerFile(target, suggestedTitle)
+        return if (registered == null) {
             target.delete()
             app.importNotices.tryEmit("Couldn't import that file — it may be damaged or unsupported")
             null
@@ -120,12 +145,26 @@ class BookImporter(private val app: VellumApp) {
     private fun contentsMatch(a: File, b: File): Boolean =
         a.inputStream().buffered().use { streamA ->
             b.inputStream().buffered().use { streamB ->
-                var byteA: Int
-                do {
-                    byteA = streamA.read()
-                    if (byteA != streamB.read()) return false
-                } while (byteA != -1)
-                true
+                val bufferA = ByteArray(DEFAULT_BUFFER_SIZE)
+                val bufferB = ByteArray(DEFAULT_BUFFER_SIZE)
+                var matches = true
+                while (true) {
+                    val countA = streamA.read(bufferA)
+                    val countB = streamB.read(bufferB)
+                    if (countA != countB) {
+                        matches = false
+                        break
+                    }
+                    if (countA < 0) break
+                    for (index in 0 until countA) {
+                        if (bufferA[index] != bufferB[index]) {
+                            matches = false
+                            break
+                        }
+                    }
+                    if (!matches) break
+                }
+                matches
             }
         }
 
@@ -202,6 +241,7 @@ class BookImporter(private val app: VellumApp) {
             author = "Unknown author",
             fileName = file.name,
             format = format,
+            category = "Comics & Manga",
             coverPath = saveCover(uuid, cover),
             seriesName = null,
             seriesIndex = null,
@@ -236,6 +276,7 @@ class BookImporter(private val app: VellumApp) {
             author = "Unknown author",
             fileName = file.name,
             format = "pdf",
+            category = null,
             coverPath = saveCover(uuid, cover),
             seriesName = null,
             seriesIndex = null,
@@ -266,6 +307,7 @@ class BookImporter(private val app: VellumApp) {
                 author = opened.author,
                 fileName = file.name,
                 format = if (isComic) "comic-epub" else "epub",
+                category = if (isComic) "Comics & Manga" else null,
                 coverPath = saveCover(uuid, opened.coverBitmap()),
                 seriesName = null,
                 seriesIndex = null,

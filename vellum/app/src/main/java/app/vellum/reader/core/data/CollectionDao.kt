@@ -21,6 +21,12 @@ interface CollectionDao {
     @Query("SELECT * FROM book_tags WHERE deletedAt IS NULL")
     fun observeBookTags(): Flow<List<BookTagCrossRef>>
 
+    @Query("SELECT * FROM genres WHERE deletedAt IS NULL ORDER BY name COLLATE NOCASE")
+    fun observeGenres(): Flow<List<GenreEntity>>
+
+    @Query("SELECT * FROM book_genres WHERE deletedAt IS NULL")
+    fun observeBookGenres(): Flow<List<BookGenreCrossRef>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCollection(collection: CollectionEntity)
 
@@ -34,6 +40,12 @@ interface CollectionDao {
     suspend fun upsertBookTag(link: BookTagCrossRef)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertGenre(genre: GenreEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertBookGenre(link: BookGenreCrossRef)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCollections(rows: List<CollectionEntity>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -44,6 +56,12 @@ interface CollectionDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertBookTags(rows: List<BookTagCrossRef>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertGenres(rows: List<GenreEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertBookGenres(rows: List<BookGenreCrossRef>)
 
     // ---- Sync: raw table dumps including tombstones ----------------------
     @Query("SELECT * FROM collections")
@@ -58,6 +76,15 @@ interface CollectionDao {
     @Query("SELECT * FROM book_tags")
     suspend fun allBookTagsRaw(): List<BookTagCrossRef>
 
+    @Query("SELECT * FROM genres")
+    suspend fun allGenresRaw(): List<GenreEntity>
+
+    @Query("SELECT * FROM book_genres")
+    suspend fun allBookGenresRaw(): List<BookGenreCrossRef>
+
+    @Query("UPDATE book_genres SET deletedAt = :deletedAt, updatedAt = :deletedAt WHERE bookUuid = :bookUuid")
+    suspend fun softDeleteGenresForBook(bookUuid: String, deletedAt: Long)
+
     @Query("DELETE FROM collections WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
     suspend fun purgeCollectionTombstones(cutoff: Long)
 
@@ -69,4 +96,10 @@ interface CollectionDao {
 
     @Query("DELETE FROM book_tags WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
     suspend fun purgeBookTagTombstones(cutoff: Long)
+
+    @Query("DELETE FROM genres WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeGenreTombstones(cutoff: Long)
+
+    @Query("DELETE FROM book_genres WHERE deletedAt IS NOT NULL AND deletedAt <= :cutoff")
+    suspend fun purgeBookGenreTombstones(cutoff: Long)
 }

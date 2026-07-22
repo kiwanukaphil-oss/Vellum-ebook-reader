@@ -10,6 +10,8 @@ import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.data.BookTagCrossRef
 import app.vellum.reader.core.data.CollectionEntity
 import app.vellum.reader.core.data.ComicPanelEntity
+import app.vellum.reader.core.data.GenreEntity
+import app.vellum.reader.core.data.BookGenreCrossRef
 import app.vellum.reader.core.data.PdfStrokeEntity
 import app.vellum.reader.core.data.ReadingPositionEntity
 import app.vellum.reader.core.data.ReadingSessionEntity
@@ -60,16 +62,18 @@ class SyncEngine(private val app: VellumApp) {
     // ---- Snapshot & merge -------------------------------------------------
 
     private data class Bundle(
-        val books: List<BookEntity>,
-        val positions: List<ReadingPositionEntity>,
-        val annotations: List<AnnotationEntity>,
-        val collections: List<CollectionEntity>,
-        val tags: List<TagEntity>,
-        val bookCollections: List<BookCollectionCrossRef>,
-        val bookTags: List<BookTagCrossRef>,
-        val panels: List<ComicPanelEntity>,
-        val strokes: List<PdfStrokeEntity>,
-        val sessions: List<ReadingSessionEntity>,
+        val books: List<BookEntity> = emptyList(),
+        val positions: List<ReadingPositionEntity> = emptyList(),
+        val annotations: List<AnnotationEntity> = emptyList(),
+        val collections: List<CollectionEntity> = emptyList(),
+        val tags: List<TagEntity> = emptyList(),
+        val bookCollections: List<BookCollectionCrossRef> = emptyList(),
+        val bookTags: List<BookTagCrossRef> = emptyList(),
+        val genres: List<GenreEntity> = emptyList(),
+        val bookGenres: List<BookGenreCrossRef> = emptyList(),
+        val panels: List<ComicPanelEntity> = emptyList(),
+        val strokes: List<PdfStrokeEntity> = emptyList(),
+        val sessions: List<ReadingSessionEntity> = emptyList(),
         val deviceAcks: Map<String, Long> = emptyMap(),
     )
 
@@ -105,6 +109,14 @@ class SyncEngine(private val app: VellumApp) {
                 app.collectionDao.allBookTagsRaw(), remote.bookTags.filter { it.updatedAt <= futureCeiling },
                 { "${it.bookUuid}/${it.tagUuid}" }, { it.updatedAt },
             ),
+            genres = mergeRows(
+                app.collectionDao.allGenresRaw(), remote.genres.filter { it.updatedAt <= futureCeiling },
+                { it.uuid }, { it.updatedAt },
+            ),
+            bookGenres = mergeRows(
+                app.collectionDao.allBookGenresRaw(), remote.bookGenres.filter { it.updatedAt <= futureCeiling },
+                { "${it.bookUuid}/${it.genreUuid}" }, { it.updatedAt },
+            ),
             panels = mergeRows(app.comicPanelDao.allRaw(), remote.panels.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
             strokes = mergeRows(app.pdfStrokeDao.allRaw(), remote.strokes.filter { it.updatedAt <= futureCeiling }, { it.uuid }, { it.updatedAt }),
             sessions = mergeRows(app.sessionDao.allRaw(), remote.sessions, { it.uuid }, { 0L }),
@@ -117,6 +129,8 @@ class SyncEngine(private val app: VellumApp) {
             merged.tags.mapNotNull { it.deletedAt }.maxOrNull(),
             merged.bookCollections.mapNotNull { it.deletedAt }.maxOrNull(),
             merged.bookTags.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.genres.mapNotNull { it.deletedAt }.maxOrNull(),
+            merged.bookGenres.mapNotNull { it.deletedAt }.maxOrNull(),
             merged.panels.mapNotNull { it.deletedAt }.maxOrNull(),
             merged.strokes.mapNotNull { it.deletedAt }.maxOrNull(),
         ).maxOrNull() ?: Long.MIN_VALUE
@@ -141,6 +155,8 @@ class SyncEngine(private val app: VellumApp) {
             tags = bundle.tags.filter { it.deletedAt == null || it.deletedAt > cutoff },
             bookCollections = bundle.bookCollections.filter { it.deletedAt == null || it.deletedAt > cutoff },
             bookTags = bundle.bookTags.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            genres = bundle.genres.filter { it.deletedAt == null || it.deletedAt > cutoff },
+            bookGenres = bundle.bookGenres.filter { it.deletedAt == null || it.deletedAt > cutoff },
             panels = bundle.panels.filter { it.deletedAt == null || it.deletedAt > cutoff },
             strokes = bundle.strokes.filter { it.deletedAt == null || it.deletedAt > cutoff },
         )
@@ -153,6 +169,8 @@ class SyncEngine(private val app: VellumApp) {
             app.pdfStrokeDao.purgeTombstones(cutoff)
             app.collectionDao.purgeBookCollectionTombstones(cutoff)
             app.collectionDao.purgeBookTagTombstones(cutoff)
+            app.collectionDao.purgeBookGenreTombstones(cutoff)
+            app.collectionDao.purgeGenreTombstones(cutoff)
             app.collectionDao.purgeCollectionTombstones(cutoff)
             app.collectionDao.purgeTagTombstones(cutoff)
             app.bookDao.purgeTombstones(cutoff)
@@ -173,6 +191,8 @@ class SyncEngine(private val app: VellumApp) {
             app.collectionDao.upsertTags(merged.tags)
             app.collectionDao.upsertBookCollections(merged.bookCollections)
             app.collectionDao.upsertBookTags(merged.bookTags)
+            app.collectionDao.upsertGenres(merged.genres)
+            app.collectionDao.upsertBookGenres(merged.bookGenres)
             app.comicPanelDao.insertAll(merged.panels)
             app.pdfStrokeDao.insertAll(merged.strokes)
             app.sessionDao.upsertAll(merged.sessions)
@@ -235,10 +255,7 @@ class SyncEngine(private val app: VellumApp) {
 
     private fun readBundle(dir: DocumentFile): Bundle {
         val file = dir.findFile("vellum-sync.json")
-            ?: return Bundle(
-                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
-                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
-            )
+            ?: return Bundle()
         val json = app.contentResolver.openInputStream(file.uri)?.bufferedReader()?.readText() ?: "{}"
         // A torn or corrupt bundle must not brick sync forever: treat it as
         // empty — the LWW merge rebuilds it from local rows, and the other
@@ -267,6 +284,18 @@ class SyncEngine(private val app: VellumApp) {
             },
             bookTags = arr("bookTags").map {
                 BookTagCrossRef(it.getString("bookUuid"), it.getString("tagUuid"), it.getLong("updatedAt"), it.optLongOrNull("deletedAt"))
+            },
+            genres = arr("genres").map {
+                GenreEntity(
+                    it.getString("uuid"), it.getString("name"), it.getLong("createdAt"),
+                    it.getLong("updatedAt"), it.optLongOrNull("deletedAt"),
+                )
+            },
+            bookGenres = arr("bookGenres").map {
+                BookGenreCrossRef(
+                    it.getString("bookUuid"), it.getString("genreUuid"),
+                    it.getLong("updatedAt"), it.optLongOrNull("deletedAt"),
+                )
             },
             panels = arr("panels").map {
                 ComicPanelEntity(
@@ -333,6 +362,24 @@ class SyncEngine(private val app: VellumApp) {
             JSONArray(
                 bundle.bookTags.map {
                     JSONObject().put("bookUuid", it.bookUuid).put("tagUuid", it.tagUuid)
+                        .put("updatedAt", it.updatedAt).putOpt("deletedAt", it.deletedAt)
+                },
+            ),
+        )
+        root.put(
+            "genres",
+            JSONArray(
+                bundle.genres.map {
+                    JSONObject().put("uuid", it.uuid).put("name", it.name).put("createdAt", it.createdAt)
+                        .put("updatedAt", it.updatedAt).putOpt("deletedAt", it.deletedAt)
+                },
+            ),
+        )
+        root.put(
+            "bookGenres",
+            JSONArray(
+                bundle.bookGenres.map {
+                    JSONObject().put("bookUuid", it.bookUuid).put("genreUuid", it.genreUuid)
                         .put("updatedAt", it.updatedAt).putOpt("deletedAt", it.deletedAt)
                 },
             ),
@@ -426,7 +473,8 @@ class SyncEngine(private val app: VellumApp) {
 
     private fun BookEntity.toJson(): JSONObject = JSONObject()
         .put("uuid", uuid).put("title", title).put("author", author).put("fileName", fileName)
-        .put("format", format).putOpt("seriesName", seriesName).putOpt("seriesIndex", seriesIndex)
+        .put("format", format).putOpt("category", category)
+        .putOpt("seriesName", seriesName).putOpt("seriesIndex", seriesIndex)
         .putOpt("comicRtl", comicRtl).put("addedAt", addedAt).put("updatedAt", updatedAt)
         .putOpt("deletedAt", deletedAt).putOpt("lastOpenedAt", lastOpenedAt)
 
@@ -436,6 +484,7 @@ class SyncEngine(private val app: VellumApp) {
         author = getString("author"),
         fileName = getString("fileName"),
         format = getString("format"),
+        category = optStringOrNull("category"),
         coverPath = null, // covers are device-local; regenerated after pull
         seriesName = optStringOrNull("seriesName"),
         seriesIndex = optFloatOrNull("seriesIndex"),

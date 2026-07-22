@@ -58,6 +58,9 @@ interface BookDao {
         updatedAt: Long,
     )
 
+    @Query("UPDATE books SET category = :category, updatedAt = :updatedAt WHERE uuid = :uuid")
+    suspend fun updateCategory(uuid: String, category: String?, updatedAt: Long)
+
     @Query("UPDATE books SET coverPath = :coverPath, updatedAt = :updatedAt WHERE uuid = :uuid")
     suspend fun setCover(uuid: String, coverPath: String?, updatedAt: Long)
 

@@ -39,7 +39,9 @@ fun OrganizeSheet(
     onDismiss: () -> Unit,
 ) {
     var newCollection by remember { mutableStateOf("") }
+    var newGenre by remember { mutableStateOf("") }
     var newTag by remember { mutableStateOf("") }
+    val selectedBooks = state.allBooks.filter { it.uuid in selectedUuids }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -54,6 +56,63 @@ fun OrganizeSheet(
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = FontFamily.Serif,
             )
+
+            Text("Primary category", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "A book has one broad home. This applies to every selected book.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                BookCategories.all.forEach { category ->
+                    val allMatch = selectedBooks.isNotEmpty() && selectedBooks.all { it.category == category }
+                    FilterChip(
+                        selected = allMatch,
+                        onClick = { viewModel.setCategoryForBooks(category, selectedUuids) },
+                        label = { Text(category) },
+                    )
+                }
+            }
+
+            Text("Genres", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Genres can overlap, so a book can appear on more than one shelf.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                state.genres.forEach { genre ->
+                    val allMembers = selectedUuids.all { genre.uuid in state.genresByBook[it].orEmpty() }
+                    FilterChip(
+                        selected = allMembers,
+                        onClick = { viewModel.setGenreForBooks(genre.uuid, selectedUuids, !allMembers) },
+                        label = { Text(genre.name) },
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = newGenre,
+                    onValueChange = { newGenre = it },
+                    label = { Text("New genre") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        if (newGenre.isNotBlank()) {
+                            viewModel.createGenre(newGenre, emptyList())
+                            newGenre = ""
+                        }
+                    },
+                ) { Text("Create") }
+            }
 
             Text("Collections", style = MaterialTheme.typography.titleSmall)
             FlowRow(
@@ -90,7 +149,7 @@ fun OrganizeSheet(
                 ) { Text("Add") }
             }
 
-            Text("Tags", style = MaterialTheme.typography.titleSmall)
+            Text("Personal tags", style = MaterialTheme.typography.titleSmall)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

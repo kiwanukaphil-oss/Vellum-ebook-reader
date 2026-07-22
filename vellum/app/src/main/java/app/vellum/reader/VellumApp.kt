@@ -12,6 +12,7 @@ import app.vellum.reader.core.data.SessionDao
 import app.vellum.reader.core.data.VellumDatabase
 import app.vellum.reader.core.settings.ReaderSettingsStore
 import app.vellum.reader.epub.EpubLibraryOpener
+import app.vellum.reader.nearby.NearbyTransferManager
 import app.vellum.reader.reader.tts.ElevenLabsAudioCache
 import app.vellum.reader.reader.tts.ElevenLabsClient
 import app.vellum.reader.reader.tts.ElevenLabsCredentialStore
@@ -36,6 +37,7 @@ class VellumApp : Application() {
                 VellumDatabase.MIGRATION_4_5,
                 VellumDatabase.MIGRATION_5_6,
                 VellumDatabase.MIGRATION_6_7,
+                VellumDatabase.MIGRATION_7_8,
             )
             .build()
     }
@@ -51,6 +53,9 @@ class VellumApp : Application() {
     val settingsStore: ReaderSettingsStore by lazy { ReaderSettingsStore(this) }
 
     val epubOpener: EpubLibraryOpener by lazy { EpubLibraryOpener(this) }
+
+    /** Temporary encrypted transfers between Vellum devices on the same Wi-Fi. */
+    val nearbyTransferManager: NearbyTransferManager by lazy { NearbyTransferManager(this) }
 
     /** Process-wide so paid synthesis requests are shared across reader recreation. */
     val elevenLabsClient: ElevenLabsClient by lazy { ElevenLabsClient() }

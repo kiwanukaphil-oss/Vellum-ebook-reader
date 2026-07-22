@@ -118,6 +118,28 @@ import kotlin.math.abs
 
 private val TTS_SPEED_OPTIONS = listOf(0.8f, 1.0f, 1.2f, 1.5f, 2.0f)
 
+internal enum class ReaderTapAction { PREVIOUS_PAGE, TOGGLE_CONTROLS, NEXT_PAGE }
+
+/**
+ * Page taps are deliberately asymmetric with swipes: only narrow outer edges
+ * turn pages, leaving a broad, dependable control zone across a full spread.
+ * Once controls are visible, a page tap always dismisses them.
+ */
+internal fun readerTapAction(
+    x: Float,
+    width: Float,
+    controlsVisible: Boolean,
+    edgeFraction: Float = 0.18f,
+): ReaderTapAction {
+    if (controlsVisible || width <= 0f) return ReaderTapAction.TOGGLE_CONTROLS
+    val edgeWidth = width * edgeFraction.coerceIn(0f, 0.5f)
+    return when {
+        x < edgeWidth -> ReaderTapAction.PREVIOUS_PAGE
+        x > width - edgeWidth -> ReaderTapAction.NEXT_PAGE
+        else -> ReaderTapAction.TOGGLE_CONTROLS
+    }
+}
+
 /** Everything one in-flight curl turn needs, captured before the first frame. */
 private class TurnSession(
     val forward: Boolean,
@@ -454,7 +476,7 @@ fun ReaderScreen(
                             CustomAccessibilityAction("Next page") { viewModel.nextPage(); true },
                         )
                     }
-                    .pointerInput(settings.turnStyle) {
+                    .pointerInput(settings.turnStyle, ui.chromeVisible) {
                         detectTapGestures(
                             onLongPress = { offset ->
                                 if (viewModel.selection.value == null) {
@@ -465,18 +487,17 @@ fun ReaderScreen(
                                 }
                             },
                         ) { offset ->
-                            // A tap on an existing highlight opens its editor;
-                            // otherwise the side/center zones behave as always.
+                            // Highlights remain directly interactive. All other
+                            // taps use stable, spread-wide zones.
                             val tappedAnnotation = chapterOffsetAt(offset)?.let(viewModel::annotationAt)
                             if (tappedAnnotation != null) {
                                 editorAnnotation = tappedAnnotation
                                 return@detectTapGestures
                             }
-                            val third = size.width / 3f
-                            when {
-                                offset.x < third -> tapTurn(forward = false)
-                                offset.x > 2 * third -> tapTurn(forward = true)
-                                else -> viewModel.toggleChrome()
+                            when (readerTapAction(offset.x, size.width.toFloat(), ui.chromeVisible)) {
+                                ReaderTapAction.PREVIOUS_PAGE -> tapTurn(forward = false)
+                                ReaderTapAction.TOGGLE_CONTROLS -> viewModel.toggleChrome()
+                                ReaderTapAction.NEXT_PAGE -> tapTurn(forward = true)
                             }
                         }
                     }
