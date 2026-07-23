@@ -180,6 +180,46 @@ data class BookGenreCrossRef(
 )
 
 /**
+ * One auditable AI Librarian proposal. Applied rows retain the exact metadata
+ * that existed immediately before application so organisation can be undone
+ * without touching the book file, reading state, or annotations.
+ */
+@Entity(
+    tableName = "ai_metadata_suggestions",
+    indices = [Index("bookUuid"), Index("status")],
+)
+data class AiMetadataSuggestionEntity(
+    @PrimaryKey val uuid: String,
+    val bookUuid: String,
+    val status: String,
+    val proposedTitle: String,
+    val proposedAuthor: String,
+    val proposedCategory: String,
+    val proposedGenresJson: String,
+    val proposedSeriesName: String?,
+    val proposedSeriesIndex: Float?,
+    val confidence: Float,
+    val explanation: String,
+    val model: String,
+    val taxonomyVersion: String,
+    val beforeTitle: String?,
+    val beforeAuthor: String?,
+    val beforeCategory: String?,
+    val beforeGenresJson: String?,
+    val beforeSeriesName: String?,
+    val beforeSeriesIndex: Float?,
+    val appliedTitle: String?,
+    val appliedAuthor: String?,
+    val appliedCategory: String?,
+    val appliedGenresJson: String?,
+    val appliedSeriesName: String?,
+    val appliedSeriesIndex: Float?,
+    val createdAt: Long,
+    val appliedAt: Long?,
+    val revertedAt: Long?,
+)
+
+/**
  * Full-text index: one row per chapter, body built by the same block
  * concatenation the paginator uses — so a match offset in [body] IS a reader
  * character offset, letting search results jump to the exact page.

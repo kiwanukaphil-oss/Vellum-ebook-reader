@@ -46,7 +46,7 @@ class BookImporter(private val app: VellumApp) {
             app.importNotices.tryEmit("Couldn't read that file")
             return@withContext null
         }
-        importPreparedTemp(temp, displayNameFor(uri))
+        importPreparedTemp(temp, displayNameFor(uri), organize = true)
     }
 
     /**
@@ -54,7 +54,11 @@ class BookImporter(private val app: VellumApp) {
      * same-Wi-Fi receiver. Copying first lets the transfer cache be cleaned as
      * soon as this method returns.
      */
-    suspend fun importFromFile(source: File, suggestedTitle: String? = null): BookEntity? =
+    suspend fun importFromFile(
+        source: File,
+        suggestedTitle: String? = null,
+        organize: Boolean = true,
+    ): BookEntity? =
         withContext(Dispatchers.IO) {
             val temp = File(app.booksDir, "${UUID.randomUUID()}.tmp")
             try {
@@ -67,10 +71,14 @@ class BookImporter(private val app: VellumApp) {
                 app.importNotices.tryEmit("Couldn't read the received file")
                 return@withContext null
             }
-            importPreparedTemp(temp, suggestedTitle ?: source.nameWithoutExtension)
+            importPreparedTemp(temp, suggestedTitle ?: source.nameWithoutExtension, organize)
         }
 
-    private suspend fun importPreparedTemp(temp: File, suggestedTitle: String?): BookEntity? {
+    private suspend fun importPreparedTemp(
+        temp: File,
+        suggestedTitle: String?,
+        organize: Boolean,
+    ): BookEntity? {
         // Same-content dedup: re-sharing a file (or a rotation replaying the
         // launch intent) must not create a second library entry.
         alreadyImportedCopy(temp)?.let { existing ->
@@ -104,6 +112,7 @@ class BookImporter(private val app: VellumApp) {
             null
         } else {
             app.importNotices.tryEmit("Added “${registered.title}”")
+            if (organize) app.aiLibrarian.organizeInBackground(registered.uuid)
             registered
         }
     }
@@ -203,7 +212,11 @@ class BookImporter(private val app: VellumApp) {
         val newcomers = app.booksDir.listFiles { file ->
             file.isFile && file.name !in known && file.extension.lowercase() in importableExtensions
         }.orEmpty()
-        val imported = newcomers.count { registerFile(it, suggestedTitle = it.nameWithoutExtension) != null }
+        val imported = newcomers.mapNotNull {
+            registerFile(it, suggestedTitle = it.nameWithoutExtension)
+        }.onEach {
+            app.aiLibrarian.organizeInBackground(it.uuid)
+        }.size
         backfillMissingAssets()
         imported
     }

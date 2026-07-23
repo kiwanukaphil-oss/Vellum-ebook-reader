@@ -5,6 +5,9 @@
   "compatibility_date": "2026-07-23",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "secrets": {
+    "required": ["OPENAI_API_KEY"]
+  },
   "vars": {
     "SUPABASE_URL": "https://cdsmygejvbusxnzscghk.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_vOcmwQ37QIVBdx0cpOTWSA_KEuSt6Jy"

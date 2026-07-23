@@ -7,6 +7,8 @@ import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.data.BookGenreCrossRef
 import app.vellum.reader.core.data.GenreEntity
 import app.vellum.reader.library.BookImporter
+import app.vellum.reader.librarian.AiEnrichmentRequest
+import app.vellum.reader.librarian.AiEnrichmentResult
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -97,11 +99,15 @@ class SharedLibraryRepository(
     ): SharedPublishResult {
         var published = 0
         val failures = mutableListOf<String>()
+        val preparedBooks = books.map { book ->
+            app.aiLibrarian.organize(book.uuid)
+            app.bookDao.byUuid(book.uuid) ?: book
+        }
         val genres = app.collectionDao.allGenresRaw().associateBy { it.uuid }
         val links = app.collectionDao.allBookGenresRaw()
             .filter { it.deletedAt == null }
             .groupBy { it.bookUuid }
-        for ((index, book) in books.withIndex()) {
+        for ((index, book) in preparedBooks.withIndex()) {
             val file = File(app.booksDir, book.fileName)
             if (!file.isFile) {
                 failures += "${book.title}: the local file is missing"
@@ -112,7 +118,7 @@ class SharedLibraryRepository(
                     SharedTransferProgress(
                         publicationUuid = book.uuid,
                         title = book.title,
-                        fraction = index.toFloat() / books.size.coerceAtLeast(1),
+                        fraction = index.toFloat() / preparedBooks.size.coerceAtLeast(1),
                         message = "Preparing “${book.title}”…",
                     ),
                 )
@@ -177,7 +183,7 @@ class SharedLibraryRepository(
             )
             authenticated { token -> api.downloadPublication(publication, temp, token) }
             val knownUuids = app.bookDao.allActive().mapTo(mutableSetOf()) { it.uuid }
-            val imported = BookImporter(app).importFromFile(temp, publication.title)
+            val imported = BookImporter(app).importFromFile(temp, publication.title, organize = false)
                 ?: throw SharedLibraryException("Vellum could not open the downloaded book.")
             val isNewImport = imported.uuid !in knownUuids
             val now = System.currentTimeMillis()
@@ -211,6 +217,9 @@ class SharedLibraryRepository(
 
     suspend fun accessTokenForImages(): String? =
         runCatching { validSession().accessToken }.getOrNull()
+
+    suspend fun enrichBook(request: AiEnrichmentRequest): AiEnrichmentResult =
+        authenticated { api.enrichBook(request, it) }
 
     private suspend fun applyGenres(bookUuid: String, names: List<String>, now: Long) {
         if (names.isEmpty()) return

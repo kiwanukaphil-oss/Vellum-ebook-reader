@@ -2,6 +2,7 @@ package app.vellum.reader
 
 import android.app.Application
 import androidx.room.Room
+import app.vellum.reader.core.data.AiMetadataDao
 import app.vellum.reader.core.data.AnnotationDao
 import app.vellum.reader.core.data.BookDao
 import app.vellum.reader.core.data.CollectionDao
@@ -12,6 +13,7 @@ import app.vellum.reader.core.data.SessionDao
 import app.vellum.reader.core.data.VellumDatabase
 import app.vellum.reader.core.settings.ReaderSettingsStore
 import app.vellum.reader.epub.EpubLibraryOpener
+import app.vellum.reader.librarian.AiLibrarian
 import app.vellum.reader.nearby.NearbyTransferManager
 import app.vellum.reader.reader.tts.ElevenLabsAudioCache
 import app.vellum.reader.reader.tts.ElevenLabsClient
@@ -42,6 +44,7 @@ class VellumApp : Application() {
                 VellumDatabase.MIGRATION_6_7,
                 VellumDatabase.MIGRATION_7_8,
                 VellumDatabase.MIGRATION_8_9,
+                VellumDatabase.MIGRATION_9_10,
             )
             .build()
     }
@@ -53,6 +56,7 @@ class VellumApp : Application() {
     val pdfStrokeDao: PdfStrokeDao get() = database.pdfStrokeDao()
     val comicPanelDao: ComicPanelDao get() = database.comicPanelDao()
     val sessionDao: SessionDao get() = database.sessionDao()
+    val aiMetadataDao: AiMetadataDao get() = database.aiMetadataDao()
 
     val settingsStore: ReaderSettingsStore by lazy { ReaderSettingsStore(this) }
 
@@ -68,6 +72,9 @@ class VellumApp : Application() {
 
     /** Optional account and network boundary for invitation-only household libraries. */
     val sharedLibraryRepository: SharedLibraryRepository by lazy { SharedLibraryRepository(this) }
+
+    /** Quiet, authenticated metadata enrichment with local review and undo. */
+    val aiLibrarian: AiLibrarian by lazy { AiLibrarian(this) }
 
     private val sharedLibraryNavigation = Channel<Unit>(Channel.CONFLATED)
     val sharedLibraryNavigationEvents = sharedLibraryNavigation.receiveAsFlow()

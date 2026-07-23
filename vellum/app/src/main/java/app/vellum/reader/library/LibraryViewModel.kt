@@ -13,6 +13,9 @@ import app.vellum.reader.core.data.BookTagCrossRef
 import app.vellum.reader.core.data.CollectionEntity
 import app.vellum.reader.core.data.GenreEntity
 import app.vellum.reader.core.data.TagEntity
+import app.vellum.reader.librarian.AiOrganizeOutcome
+import app.vellum.reader.librarian.VellumAiTaxonomy
+import app.vellum.reader.shared.SharedAccountState
 import app.vellum.reader.sync.SyncEngine
 import java.io.File
 import java.util.UUID
@@ -179,6 +182,11 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
 
     val syncStatus = MutableStateFlow<String?>(null)
     val syncing = MutableStateFlow(false)
+    val aiSuggestions = app.aiLibrarian.suggestions
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val aiProcessing = app.aiLibrarian.processing
+    val aiAccount = app.sharedLibraryRepository.accountState
+    val aiStatus = MutableStateFlow<String?>(null)
 
     init {
         viewModelScope.launch {
@@ -200,7 +208,7 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
             .map { it.name.lowercase() }
             .toSet()
         val now = System.currentTimeMillis()
-        DEFAULT_GENRES.filter { it.lowercase() !in existing }.forEach { name ->
+        VellumAiTaxonomy.genres.filter { it.lowercase() !in existing }.forEach { name ->
             app.collectionDao.upsertGenre(
                 GenreEntity(
                     uuid = UUID.nameUUIDFromBytes("vellum-genre:$name".toByteArray()).toString(),
@@ -239,6 +247,7 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
     }
 
     fun clearSyncStatus() { if (!syncing.value) syncStatus.value = null }
+    fun clearAiStatus() { aiStatus.value = null }
     fun setSort(mode: ShelfSort) { sort.value = mode }
     fun setGroupBy(group: LibraryGroup) { groupBy.value = group }
 
@@ -386,6 +395,74 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
         }
     }
 
+    fun organizeLibrary(force: Boolean = false) {
+        if (aiProcessing.value.isNotEmpty()) return
+        viewModelScope.launch {
+            if (aiAccount.value !is SharedAccountState.SignedIn) {
+                aiStatus.value = "Sign in to Shared Libraries once to use the private AI Librarian."
+                return@launch
+            }
+            val candidates = if (force) {
+                state.value.allBooks
+            } else {
+                state.value.allBooks.filter { book ->
+                    book.category == null ||
+                        book.author.equals("Unknown author", ignoreCase = true) ||
+                        '_' in book.title ||
+                        state.value.genresByBook[book.uuid].isNullOrEmpty()
+                }
+            }
+            if (candidates.isEmpty()) {
+                aiStatus.value = "Everything is already organised."
+                return@launch
+            }
+            aiStatus.value = "Organising 0 of ${candidates.size}…"
+            val (applied, review) = app.aiLibrarian.organizeAll(
+                bookUuids = candidates.map { it.uuid },
+                force = force,
+            ) { complete, total ->
+                aiStatus.value = "Organising $complete of $total…"
+            }
+            aiStatus.value = buildString {
+                append("$applied organised")
+                if (review > 0) append(" · $review ${if (review == 1) "suggestion" else "suggestions"} to review")
+                if (applied == 0 && review == 0) append(" · nothing new")
+            }
+        }
+    }
+
+    fun organizeBooks(bookUuids: Set<String>, force: Boolean = true) {
+        if (bookUuids.isEmpty() || aiProcessing.value.isNotEmpty()) return
+        viewModelScope.launch {
+            if (aiAccount.value !is SharedAccountState.SignedIn) {
+                aiStatus.value = "Sign in to Shared Libraries once to use the private AI Librarian."
+                return@launch
+            }
+            val (applied, review) = app.aiLibrarian.organizeAll(bookUuids.toList(), force)
+            aiStatus.value = "$applied organised${if (review > 0) " · $review to review" else ""}"
+        }
+    }
+
+    fun applyAiSuggestion(uuid: String) {
+        viewModelScope.launch {
+            aiStatus.value = if (app.aiLibrarian.apply(uuid)) "Suggestion applied · You can undo it below." else null
+        }
+    }
+
+    fun dismissAiSuggestion(uuid: String) {
+        viewModelScope.launch { app.aiLibrarian.dismiss(uuid) }
+    }
+
+    fun undoAiSuggestion(uuid: String) {
+        viewModelScope.launch {
+            aiStatus.value = if (app.aiLibrarian.undo(uuid)) {
+                "Organisation undone."
+            } else {
+                "This book was edited afterwards, so Vellum left your newer changes untouched."
+            }
+        }
+    }
+
     fun updateMetadata(uuid: String, title: String, author: String, seriesName: String?, seriesIndex: Float?) {
         viewModelScope.launch {
             app.bookDao.updateMetadata(
@@ -448,12 +525,4 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
         book.coverPath?.let { File(it).delete() }
     }
 
-    private companion object {
-        val DEFAULT_GENRES = listOf(
-            "Biography & Memoir", "Classics", "Essays", "Fantasy", "Graphic Memoir",
-            "Graphic Novel", "Historical", "History", "Literary", "Mystery & Thriller",
-            "Nature", "Philosophy", "Poetry", "Romance", "Science", "Science Fiction",
-            "Society & Politics",
-        )
-    }
 }

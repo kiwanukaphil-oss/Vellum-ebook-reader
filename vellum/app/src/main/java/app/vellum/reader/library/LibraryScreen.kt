@@ -44,6 +44,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -105,6 +106,7 @@ import app.vellum.reader.core.theme.sharedCoverBounds
 import app.vellum.reader.nearby.AddBooksSheet
 import app.vellum.reader.nearby.NearbyTransferMode
 import app.vellum.reader.nearby.NearbyTransferSheet
+import app.vellum.reader.shared.SharedAccountState
 import coil.compose.AsyncImage
 import java.io.File
 import kotlin.math.absoluteValue
@@ -130,10 +132,15 @@ fun LibraryScreen(
     var confirmBatchDelete by remember { mutableStateOf(false) }
     var syncSheetOpen by remember { mutableStateOf(false) }
     var addBooksOpen by rememberSaveable { mutableStateOf(false) }
+    var aiLibrarianOpen by rememberSaveable { mutableStateOf(false) }
     var nearbyMode by rememberSaveable { mutableStateOf<NearbyTransferMode?>(null) }
     val settings by app.settingsStore.settings.collectAsState(initial = ReaderSettings())
     val syncStatus by viewModel.syncStatus.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
+    val aiSuggestions by viewModel.aiSuggestions.collectAsState()
+    val aiProcessing by viewModel.aiProcessing.collectAsState()
+    val aiAccount by viewModel.aiAccount.collectAsState()
+    val aiStatus by viewModel.aiStatus.collectAsState()
     val scope = rememberCoroutineScope()
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -188,6 +195,12 @@ fun LibraryScreen(
                                 IconButton(onClick = {
                                     detailsFor = state.allBooks.firstOrNull { it.uuid in selected }
                                 }) { Icon(Icons.Filled.Edit, contentDescription = "Edit book") }
+                            }
+                            IconButton(onClick = {
+                                viewModel.organizeBooks(selected)
+                                aiLibrarianOpen = true
+                            }) {
+                                Icon(Icons.Filled.AutoAwesome, contentDescription = "Organise selected books automatically")
                             }
                             IconButton(onClick = { organizeOpen = true }) {
                                 Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Organize selected books")
@@ -301,6 +314,24 @@ fun LibraryScreen(
                                             },
                                         )
                                     }
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text("AI Librarian")
+                                                Text(
+                                                    "Name and organise books automatically",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        },
+                                        leadingIcon = { Icon(Icons.Filled.AutoAwesome, contentDescription = null) },
+                                        onClick = {
+                                            libraryMenuOpen = false
+                                            aiLibrarianOpen = true
+                                        },
+                                    )
                                 }
                             }
                         },
@@ -408,6 +439,27 @@ fun LibraryScreen(
                 nearbyMode = NearbyTransferMode.RECEIVE
             },
             onDismiss = { addBooksOpen = false },
+        )
+    }
+    if (aiLibrarianOpen) {
+        AiLibrarianSheet(
+            books = state.allBooks,
+            suggestions = aiSuggestions,
+            processing = aiProcessing,
+            signedIn = aiAccount is SharedAccountState.SignedIn,
+            status = aiStatus,
+            onOrganize = viewModel::organizeLibrary,
+            onApply = viewModel::applyAiSuggestion,
+            onDismissSuggestion = viewModel::dismissAiSuggestion,
+            onUndo = viewModel::undoAiSuggestion,
+            onSignIn = {
+                aiLibrarianOpen = false
+                onOpenSharedLibraries()
+            },
+            onDismiss = {
+                aiLibrarianOpen = false
+                viewModel.clearAiStatus()
+            },
         )
     }
     nearbyMode?.let { mode ->

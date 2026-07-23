@@ -3,6 +3,8 @@ package app.vellum.reader.shared
 import android.net.Uri
 import android.util.Base64
 import app.vellum.reader.BuildConfig
+import app.vellum.reader.librarian.AiEnrichmentRequest
+import app.vellum.reader.librarian.AiEnrichmentResult
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URLEncoder
@@ -263,6 +265,41 @@ class SharedLibraryApi(
 
     fun coverUrl(libraryUuid: String, publicationUuid: String): String =
         "$booksApiUrl/v1/libraries/$libraryUuid/publications/$publicationUuid/cover"
+
+    suspend fun enrichBook(
+        request: AiEnrichmentRequest,
+        accessToken: String,
+    ): AiEnrichmentResult = withContext(Dispatchers.IO) {
+        requireConfigured()
+        val response = requestJson(
+            url = "$booksApiUrl/v1/librarian/enrich",
+            method = "POST",
+            body = JSONObject()
+                .put("title", request.title)
+                .put("author", request.author)
+                .put("fileName", request.fileName)
+                .put("format", request.format)
+                .put("currentCategory", request.currentCategory)
+                .put("currentGenres", JSONArray(request.currentGenres))
+                .put("excerpt", request.excerpt),
+            accessToken = accessToken,
+        ) as? JSONObject ?: throw SharedLibraryException("The librarian returned an invalid response.")
+        val genres = response.optJSONArray("genres") ?: JSONArray()
+        AiEnrichmentResult(
+            title = response.getString("title"),
+            author = response.getString("author"),
+            category = response.getString("category"),
+            genres = (0 until genres.length()).mapNotNull {
+                genres.optString(it).trim().takeIf(String::isNotBlank)
+            },
+            seriesName = response.optNullableString("seriesName"),
+            seriesIndex = if (response.isNull("seriesIndex")) null else response.getDouble("seriesIndex").toFloat(),
+            confidence = response.getDouble("confidence").toFloat(),
+            explanation = response.getString("explanation"),
+            model = response.getString("model"),
+            taxonomyVersion = response.getString("taxonomyVersion"),
+        )
+    }
 
     fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")

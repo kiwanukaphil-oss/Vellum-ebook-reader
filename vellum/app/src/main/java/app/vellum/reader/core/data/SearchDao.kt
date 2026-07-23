@@ -25,6 +25,12 @@ interface SearchDao {
     @Query("SELECT COUNT(*) FROM book_text_fts WHERE bookUuid = :bookUuid")
     suspend fun chapterCountForBook(bookUuid: String): Int
 
+    @Query(
+        "SELECT substr(body, 1, :characters) FROM book_text_fts " +
+            "WHERE bookUuid = :bookUuid ORDER BY CAST(chapterIndex AS INTEGER) LIMIT 2",
+    )
+    suspend fun excerptForBook(bookUuid: String, characters: Int = 2500): List<String>
+
     /** Delete-then-insert is one transaction, so search never sees half an index. */
     @Transaction
     suspend fun replaceForBook(bookUuid: String, rows: List<BookTextFts>) {

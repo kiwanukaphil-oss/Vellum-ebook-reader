@@ -19,9 +19,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BookTagCrossRef::class,
         GenreEntity::class,
         BookGenreCrossRef::class,
+        AiMetadataSuggestionEntity::class,
         BookTextFts::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 abstract class VellumDatabase : RoomDatabase() {
@@ -32,8 +33,36 @@ abstract class VellumDatabase : RoomDatabase() {
     abstract fun pdfStrokeDao(): PdfStrokeDao
     abstract fun comicPanelDao(): ComicPanelDao
     abstract fun sessionDao(): SessionDao
+    abstract fun aiMetadataDao(): AiMetadataDao
 
     companion object {
+        /** v9 -> v10: local, reversible AI Librarian suggestion history. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ai_metadata_suggestions` (" +
+                        "`uuid` TEXT NOT NULL, `bookUuid` TEXT NOT NULL, `status` TEXT NOT NULL, " +
+                        "`proposedTitle` TEXT NOT NULL, `proposedAuthor` TEXT NOT NULL, " +
+                        "`proposedCategory` TEXT NOT NULL, `proposedGenresJson` TEXT NOT NULL, " +
+                        "`proposedSeriesName` TEXT, `proposedSeriesIndex` REAL, `confidence` REAL NOT NULL, " +
+                        "`explanation` TEXT NOT NULL, `model` TEXT NOT NULL, `taxonomyVersion` TEXT NOT NULL, " +
+                        "`beforeTitle` TEXT, `beforeAuthor` TEXT, `beforeCategory` TEXT, `beforeGenresJson` TEXT, " +
+                        "`beforeSeriesName` TEXT, `beforeSeriesIndex` REAL, " +
+                        "`appliedTitle` TEXT, `appliedAuthor` TEXT, `appliedCategory` TEXT, `appliedGenresJson` TEXT, " +
+                        "`appliedSeriesName` TEXT, `appliedSeriesIndex` REAL, `createdAt` INTEGER NOT NULL, " +
+                        "`appliedAt` INTEGER, `revertedAt` INTEGER, PRIMARY KEY(`uuid`))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_metadata_suggestions_bookUuid` " +
+                        "ON `ai_metadata_suggestions` (`bookUuid`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_metadata_suggestions_status` " +
+                        "ON `ai_metadata_suggestions` (`status`)",
+                )
+            }
+        }
+
         /** v8 -> v9: durable local provenance for Shared Library downloads. */
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
