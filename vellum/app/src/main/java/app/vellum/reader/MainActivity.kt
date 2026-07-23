@@ -33,11 +33,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -58,6 +59,8 @@ import app.vellum.reader.notes.NotesScreen
 import app.vellum.reader.pdf.PdfReaderScreen
 import app.vellum.reader.reader.ui.ReaderScreen
 import app.vellum.reader.search.SearchScreen
+import app.vellum.reader.shared.SharedLibraryScreen
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -82,6 +85,23 @@ class MainActivity : ComponentActivity() {
 
     /** "Open with Vellum" (VIEW) and share-to-Vellum (SEND) EPUB imports. */
     private fun handleImportIntent(intent: Intent?) {
+        val deepLink = intent?.data
+        if (intent?.action == Intent.ACTION_VIEW && deepLink?.scheme == "vellum") {
+            val app = application as VellumApp
+            when (deepLink.host) {
+                "auth" -> runCatching {
+                    app.sharedLibraryRepository.completeAuthCallback(deepLink)
+                    app.importNotices.tryEmit("Signed in to Shared Libraries")
+                }.onFailure {
+                    app.importNotices.tryEmit(it.message ?: "That sign-in link could not be used")
+                }
+                "shared" -> deepLink.getQueryParameter("code")?.let {
+                    app.sharedLibraryRepository.rememberInvitation(it)
+                }
+            }
+            app.openSharedLibraries()
+            return
+        }
         val uri: Uri? = when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -127,11 +147,17 @@ private fun AnimatedContentScope.ProvideNavAnimation(content: @Composable () -> 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun VellumNavHost() {
+    val app = LocalContext.current.applicationContext as VellumApp
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val openBook: (BookEntity) -> Unit = { book ->
         navController.navigate(readerRouteFor(book.format, book.uuid))
+    }
+    LaunchedEffect(app) {
+        app.sharedLibraryNavigationEvents.collect {
+            navController.navigate("shared") { launchSingleTop = true }
+        }
     }
 
     // The nav bar only exists on the four top-level tabs; readers and search
@@ -197,8 +223,12 @@ private fun VellumNavHost() {
                     LibraryScreen(
                         onOpenBook = openBook,
                         onOpenSearch = { navController.navigate("search") },
+                        onOpenSharedLibraries = { navController.navigate("shared") },
                     )
                 }
+            }
+            composable("shared") {
+                SharedLibraryScreen(onBack = { navController.popBackStack() })
             }
             composable("reading") {
                 ProvideNavAnimation {

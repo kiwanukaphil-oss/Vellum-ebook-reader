@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BookGenreCrossRef::class,
         BookTextFts::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class VellumDatabase : RoomDatabase() {
@@ -34,6 +34,18 @@ abstract class VellumDatabase : RoomDatabase() {
     abstract fun sessionDao(): SessionDao
 
     companion object {
+        /** v8 -> v9: durable local provenance for Shared Library downloads. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `books` ADD COLUMN `sourceLibraryUuid` TEXT")
+                db.execSQL("ALTER TABLE `books` ADD COLUMN `sourcePublicationUuid` TEXT")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_books_sourceLibraryUuid_sourcePublicationUuid` " +
+                        "ON `books` (`sourceLibraryUuid`, `sourcePublicationUuid`)",
+                )
+            }
+        }
+
         /** v7 -> v8: primary categories and reusable, overlapping genres. */
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {

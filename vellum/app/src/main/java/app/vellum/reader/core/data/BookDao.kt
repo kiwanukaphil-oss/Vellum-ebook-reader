@@ -21,6 +21,12 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE fileName = :fileName LIMIT 1")
     suspend fun byFileName(fileName: String): BookEntity?
 
+    @Query(
+        "SELECT * FROM books WHERE sourceLibraryUuid = :libraryUuid " +
+            "AND sourcePublicationUuid = :publicationUuid AND deletedAt IS NULL LIMIT 1",
+    )
+    suspend fun bySharedPublication(libraryUuid: String, publicationUuid: String): BookEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(book: BookEntity)
 
@@ -66,6 +72,17 @@ interface BookDao {
 
     @Query("UPDATE books SET comicRtl = :rtl, updatedAt = :updatedAt WHERE uuid = :uuid")
     suspend fun setComicRtl(uuid: String, rtl: Boolean, updatedAt: Long)
+
+    @Query(
+        "UPDATE books SET sourceLibraryUuid = :libraryUuid, sourcePublicationUuid = :publicationUuid, " +
+            "updatedAt = :updatedAt WHERE uuid = :uuid",
+    )
+    suspend fun setSharedProvenance(
+        uuid: String,
+        libraryUuid: String,
+        publicationUuid: String,
+        updatedAt: Long,
+    )
 
     /** Soft delete: tombstone for future sync; the caller removes the files. */
     @Query("UPDATE books SET deletedAt = :deletedAt, updatedAt = :deletedAt WHERE uuid = :uuid")

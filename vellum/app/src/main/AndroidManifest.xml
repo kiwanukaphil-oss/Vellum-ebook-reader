@@ -26,6 +26,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Supabase passwordless callback and expiring household invitations. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vellum" android:host="auth" android:pathPrefix="/callback" />
+                <data android:scheme="vellum" android:host="shared" android:pathPrefix="/join" />
+            </intent-filter>
             <!-- "Open with Vellum" from file managers and downloads. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

@@ -11,6 +11,61 @@ import org.junit.Test
 
 class VellumMigrationTest {
     @Test
+    fun migrationEightToNineAddsSharedProvenanceWithoutChangingExistingBooks() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "migration-8-9-${System.nanoTime()}.db"
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(databaseName)
+                .callback(
+                    object : SupportSQLiteOpenHelper.Callback(8) {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            db.execSQL(
+                                "CREATE TABLE books (" +
+                                    "uuid TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, fileName TEXT NOT NULL)",
+                            )
+                        }
+
+                        override fun onUpgrade(
+                            db: SupportSQLiteDatabase,
+                            oldVersion: Int,
+                            newVersion: Int,
+                        ) = Unit
+                    },
+                )
+                .build(),
+        )
+
+        try {
+            val database = helper.writableDatabase
+            database.execSQL("INSERT INTO books VALUES ('existing', 'Existing book', 'existing.epub')")
+
+            VellumDatabase.MIGRATION_8_9.migrate(database)
+
+            val columns = columnNames(database, "books")
+            assertTrue(columns.contains("sourceLibraryUuid"))
+            assertTrue(columns.contains("sourcePublicationUuid"))
+            assertTrue(
+                indexNames(database, "books")
+                    .contains("index_books_sourceLibraryUuid_sourcePublicationUuid"),
+            )
+            database.query(
+                "SELECT title, fileName, sourceLibraryUuid, sourcePublicationUuid " +
+                    "FROM books WHERE uuid = 'existing'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("Existing book", cursor.getString(0))
+                assertEquals("existing.epub", cursor.getString(1))
+                assertTrue(cursor.isNull(2))
+                assertTrue(cursor.isNull(3))
+            }
+        } finally {
+            helper.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
+    @Test
     fun migrationSevenToEightAddsCategoriesAndGenresWithoutMisclassifyingBooks() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val databaseName = "migration-7-8-${System.nanoTime()}.db"

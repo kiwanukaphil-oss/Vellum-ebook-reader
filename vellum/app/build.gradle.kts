@@ -1,9 +1,22 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
 }
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun localConfig(name: String): String =
+    providers.gradleProperty(name).orNull ?: localProperties.getProperty(name, "")
+
+fun quotedBuildConfig(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "app.vellum.reader"
@@ -16,6 +29,9 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SUPABASE_URL", quotedBuildConfig(localConfig("VELLUM_SUPABASE_URL")))
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", quotedBuildConfig(localConfig("VELLUM_SUPABASE_PUBLISHABLE_KEY")))
+        buildConfigField("String", "SHARED_BOOKS_API_URL", quotedBuildConfig(localConfig("VELLUM_SHARED_BOOKS_API_URL")))
     }
 
     buildTypes {
@@ -37,6 +53,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

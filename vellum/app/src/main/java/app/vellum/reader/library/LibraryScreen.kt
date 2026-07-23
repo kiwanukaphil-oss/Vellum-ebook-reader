@@ -42,11 +42,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -113,6 +115,7 @@ import kotlinx.coroutines.launch
 fun LibraryScreen(
     onOpenBook: (BookEntity) -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenSharedLibraries: () -> Unit,
 ) {
     val app = LocalContext.current.applicationContext as VellumApp
     val viewModel: LibraryViewModel = viewModel { LibraryViewModel(app) }
@@ -121,6 +124,7 @@ fun LibraryScreen(
     val selectionMode = selected.isNotEmpty()
     var activeTab by rememberSaveable { mutableStateOf(LibraryTab.BROWSE) }
     var libraryMenuOpen by remember { mutableStateOf(false) }
+    var sourceMenuOpen by remember { mutableStateOf(false) }
     var detailsFor by remember { mutableStateOf<BookEntity?>(null) }
     var organizeOpen by remember { mutableStateOf(false) }
     var confirmBatchDelete by remember { mutableStateOf(false) }
@@ -201,7 +205,55 @@ fun LibraryScreen(
                     )
                 } else {
                     TopAppBar(
-                        title = { Text("Vellum", fontFamily = Fraunces) },
+                        title = {
+                            Box {
+                                TextButton(onClick = { sourceMenuOpen = true }) {
+                                    Text(
+                                        "My Library",
+                                        fontFamily = Fraunces,
+                                        style = MaterialTheme.typography.titleLarge,
+                                    )
+                                    Icon(Icons.Filled.ExpandMore, contentDescription = "Choose library source")
+                                }
+                                DropdownMenu(
+                                    expanded = sourceMenuOpen,
+                                    onDismissRequest = { sourceMenuOpen = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text("My Library")
+                                                Text(
+                                                    "Private and available offline",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        },
+                                        leadingIcon = { Icon(Icons.Filled.Check, contentDescription = null) },
+                                        onClick = { sourceMenuOpen = false },
+                                    )
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text("Shared Libraries")
+                                                Text(
+                                                    "Private household catalogues",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = null) },
+                                        onClick = {
+                                            sourceMenuOpen = false
+                                            onOpenSharedLibraries()
+                                        },
+                                    )
+                                }
+                            }
+                        },
                         actions = {
                             IconButton(onClick = onOpenSearch) {
                                 Icon(Icons.Filled.Search, contentDescription = "Search library")

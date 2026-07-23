@@ -1,10 +1,23 @@
 # Vellum Shared Libraries — Product and Delivery Roadmap
 
-**Status:** Product definition for approval before implementation  
+**Status:** Household pilot implemented; awaiting physical-device acceptance testing
 **Created:** 2026-07-23  
 **Companion documents:** [Premium app brief](premium-ebook-app-prompt.md) · [Existing build plan](build-plan.md)
 
 ---
+
+## Delivery status
+
+The focused two-person household release is implemented as of 2026-07-23:
+
+- Supabase Free hosts passwordless identity, invitations, membership, catalogue metadata, and audit records.
+- A private Cloudflare R2 bucket stores original book files and covers in the EU region.
+- A Cloudflare Worker authorises every upload and download against Supabase membership; files have no public URLs.
+- The Android app keeps local reading account-free, adds the Shared Libraries source, supports email invitations, multi-book publishing, search, download-and-add, and offline provenance.
+- Database version 9 adds provenance without deleting or replacing existing books. The app upgrade is designed to preserve the current on-device library.
+- Unit tests, Android lint, a production-configured debug build, local database role tests, and live Worker checks pass. Supabase advisors report only the deliberately callable authenticated RPCs and brand-new indexes that have not yet accumulated production usage.
+
+Remaining acceptance step: install the upgrade on the connected phone without uninstalling the existing package, then exercise the owner-and-invitee journey with two real email addresses.
 
 ## 1. North star
 
@@ -36,7 +49,7 @@ These decisions are established by the current product discussion and should be 
 | Ownership | The shared-library owner controls the library and its storage quota. Uploaders must have permission to share the content. |
 | Download semantics | A download becomes a durable local copy. Revoking membership prevents future access but cannot reliably erase files already downloaded. |
 | Storage | Original files and covers live in private cloud object storage. Catalogue, membership, metadata, and audit records live in a relational database. |
-| Downloads | Authorised through short-lived signed links; object storage never exposes permanent public URLs. |
+| Downloads | Streamed through an authenticated Worker that verifies current library membership; object storage never exposes public URLs. |
 | Offline behaviour | Downloaded books use the existing app-private book store and remain readable offline. |
 | Metadata | Bibliographic metadata travels automatically. Shared classifications are recommendations. Personal organisation and reading data remain private. |
 | Interoperability | Model the catalogue contract on [OPDS 2.0](https://specs.opds.io/opds-2.0) concepts so future OPDS import/export remains possible. |

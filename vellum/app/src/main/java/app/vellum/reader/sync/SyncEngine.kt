@@ -477,6 +477,8 @@ class SyncEngine(private val app: VellumApp) {
         .putOpt("seriesName", seriesName).putOpt("seriesIndex", seriesIndex)
         .putOpt("comicRtl", comicRtl).put("addedAt", addedAt).put("updatedAt", updatedAt)
         .putOpt("deletedAt", deletedAt).putOpt("lastOpenedAt", lastOpenedAt)
+        .putOpt("sourceLibraryUuid", sourceLibraryUuid)
+        .putOpt("sourcePublicationUuid", sourcePublicationUuid)
 
     private fun JSONObject.toBook(): BookEntity = BookEntity(
         uuid = getString("uuid"),
@@ -493,6 +495,8 @@ class SyncEngine(private val app: VellumApp) {
         updatedAt = getLong("updatedAt"),
         deletedAt = optLongOrNull("deletedAt"),
         lastOpenedAt = optLongOrNull("lastOpenedAt"),
+        sourceLibraryUuid = optStringOrNull("sourceLibraryUuid"),
+        sourcePublicationUuid = optStringOrNull("sourcePublicationUuid"),
     )
 
     private fun ReadingPositionEntity.toJson(): JSONObject = JSONObject()

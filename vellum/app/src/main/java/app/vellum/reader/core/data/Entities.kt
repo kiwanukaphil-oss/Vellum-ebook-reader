@@ -9,7 +9,10 @@ import androidx.room.PrimaryKey
  * All entities carry {uuid, updatedAt, deletedAt} per the build plan's
  * sync-ready rule: Phase 9 sync becomes a transport problem, not a migration.
  */
-@Entity(tableName = "books")
+@Entity(
+    tableName = "books",
+    indices = [Index(value = ["sourceLibraryUuid", "sourcePublicationUuid"])],
+)
 data class BookEntity(
     @PrimaryKey val uuid: String,
     val title: String,
@@ -29,6 +32,9 @@ data class BookEntity(
     val updatedAt: Long,
     val deletedAt: Long?,
     val lastOpenedAt: Long?,
+    /** Optional provenance for durable downloads from a Vellum Shared Library. */
+    val sourceLibraryUuid: String? = null,
+    val sourcePublicationUuid: String? = null,
 )
 
 /**

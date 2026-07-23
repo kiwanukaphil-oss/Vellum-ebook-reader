@@ -16,10 +16,13 @@ import app.vellum.reader.nearby.NearbyTransferManager
 import app.vellum.reader.reader.tts.ElevenLabsAudioCache
 import app.vellum.reader.reader.tts.ElevenLabsClient
 import app.vellum.reader.reader.tts.ElevenLabsCredentialStore
+import app.vellum.reader.shared.SharedLibraryRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import java.io.File
 
 /**
@@ -38,6 +41,7 @@ class VellumApp : Application() {
                 VellumDatabase.MIGRATION_5_6,
                 VellumDatabase.MIGRATION_6_7,
                 VellumDatabase.MIGRATION_7_8,
+                VellumDatabase.MIGRATION_8_9,
             )
             .build()
     }
@@ -61,6 +65,16 @@ class VellumApp : Application() {
     val elevenLabsClient: ElevenLabsClient by lazy { ElevenLabsClient() }
     val elevenLabsCredentials: ElevenLabsCredentialStore by lazy { ElevenLabsCredentialStore(this) }
     val elevenLabsCache: ElevenLabsAudioCache by lazy { ElevenLabsAudioCache(this) }
+
+    /** Optional account and network boundary for invitation-only household libraries. */
+    val sharedLibraryRepository: SharedLibraryRepository by lazy { SharedLibraryRepository(this) }
+
+    private val sharedLibraryNavigation = Channel<Unit>(Channel.CONFLATED)
+    val sharedLibraryNavigationEvents = sharedLibraryNavigation.receiveAsFlow()
+
+    fun openSharedLibraries() {
+        sharedLibraryNavigation.trySend(Unit)
+    }
 
     /** App-private home of every imported book file. */
     val booksDir: File by lazy { File(filesDir, "books").apply { mkdirs() } }

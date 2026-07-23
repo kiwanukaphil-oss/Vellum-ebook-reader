@@ -20,6 +20,10 @@ vellum/captures/
 .agents/
 .codex/
 .claude/
+.wrangler/
+node_modules/
+.dev.vars
+.env
 
 # Local test media (not project sources)
 *.cbr
