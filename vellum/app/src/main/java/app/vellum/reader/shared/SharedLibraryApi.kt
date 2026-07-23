@@ -15,7 +15,11 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-class SharedLibraryException(message: String) : Exception(message)
+class SharedLibraryException(
+    message: String,
+    val status: Int? = null,
+    val code: String? = null,
+) : Exception(message)
 
 /**
  * Small provider-neutral client around Supabase Auth/PostgREST and the private
@@ -397,26 +401,39 @@ class SharedLibraryApi(
         val text = runCatching {
             connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
         }.getOrDefault("")
-        val message = runCatching {
-            val json = JSONObject(text)
-            json.optString("message").ifBlank { json.optString("error_description") }
-                .ifBlank { json.optString("error") }
-        }.getOrDefault("")
-        val code = runCatching { JSONObject(text).optString("code") }.getOrDefault("")
+        val error = runCatching { JSONObject(text) }.getOrNull()
+        val message = error
+            ?.optString("message")
+            ?.ifBlank { error.optString("msg") }
+            ?.ifBlank { error.optString("error_description") }
+            ?.ifBlank { error.optString("error") }
+            .orEmpty()
+        val code = error
+            ?.optString("code")
+            ?.ifBlank { error.optString("error_code") }
+            .orEmpty()
         return SharedLibraryException(
             when (code) {
                 "PGRST202" -> "Vellum could not prepare this book for upload. Please update the app and try again."
+                "over_email_send_rate_limit" ->
+                    "Too many sign-in emails were requested. Please wait about an hour, then request one new link."
+                "over_request_rate_limit" ->
+                    "Too many sign-in attempts were made. Please wait a few minutes, then try once."
+                "otp_expired" -> "That sign-in link has expired. Please request one new link."
                 else -> message.ifBlank {
                     when (status) {
                         401 -> "Please sign in again."
                         403 -> "You do not have permission to do that."
                         404 -> "That shared item is no longer available."
+                        429 -> "Too many requests were made. Please wait a while, then try once."
                         409 -> "That book is already in this shared library."
                         413 -> "That file is too large for the household library."
                         else -> "The shared library could not be reached ($status)."
                     }
                 }.take(MAX_PUBLIC_ERROR_CHARACTERS)
             },
+            status = status,
+            code = code.ifBlank { null },
         )
     }
 

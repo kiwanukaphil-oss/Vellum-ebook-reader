@@ -85,6 +85,7 @@ import coil.compose.AsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import java.io.File
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -291,6 +292,20 @@ private fun SignedOutPanel(
     onSendMagicLink: (String) -> Unit,
 ) {
     var email by rememberSaveable { mutableStateOf("") }
+    var retryAvailableAt by rememberSaveable { mutableStateOf(0L) }
+    var clock by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(retryAvailableAt) {
+        while (retryAvailableAt > clock) {
+            delay(1_000)
+            clock = System.currentTimeMillis()
+        }
+    }
+    val retrySeconds = ((retryAvailableAt - clock).coerceAtLeast(0L) + 999L) / 1_000L
+    val requestLink: (String) -> Unit = { address ->
+        clock = System.currentTimeMillis()
+        retryAvailableAt = clock + MAGIC_LINK_RETRY_DELAY_MILLIS
+        onSendMagicLink(address)
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 28.dp, vertical = 36.dp),
@@ -347,12 +362,14 @@ private fun SignedOutPanel(
             }
             item {
                 Button(
-                    onClick = { onSendMagicLink(email) },
-                    enabled = email.contains('@') && !loading,
+                    onClick = { requestLink(email) },
+                    enabled = email.contains('@') && !loading && retrySeconds == 0L,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    else Text("Send secure sign-in link")
+                    else Text(
+                        if (retrySeconds > 0L) "Try again in ${retrySeconds}s" else "Send secure sign-in link",
+                    )
                 }
             }
         } else {
@@ -363,8 +380,11 @@ private fun SignedOutPanel(
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Check your email", style = MaterialTheme.typography.titleLarge, fontFamily = Fraunces)
                         Text("We sent a one-time Vellum link to $emailSentTo. Open it on this device to continue.")
-                        TextButton(onClick = { onSendMagicLink(emailSentTo) }, enabled = !loading) {
-                            Text("Send again")
+                        TextButton(
+                            onClick = { requestLink(emailSentTo) },
+                            enabled = !loading && retrySeconds == 0L,
+                        ) {
+                            Text(if (retrySeconds > 0L) "Send again in ${retrySeconds}s" else "Send again")
                         }
                     }
                 }
@@ -1023,3 +1043,5 @@ private fun CenteredProgress() {
         CircularProgressIndicator()
     }
 }
+
+private const val MAGIC_LINK_RETRY_DELAY_MILLIS = 60_000L
