@@ -123,6 +123,7 @@ class SharedLibraryRepository(
                     ),
                 )
                 val digest = api.sha256(file)
+                app.bookDao.setContentSha256(book.uuid, digest)
                 val publicationUuid = authenticated { token ->
                     api.beginPublication(
                         libraryUuid = libraryUuid,
@@ -207,6 +208,7 @@ class SharedLibraryRepository(
                     publication.uuid,
                     now,
                 )
+                app.bookDao.setContentSha256(imported.uuid, publication.sha256)
                 applyGenres(imported.uuid, publication.genres, now)
             }
             return app.bookDao.byUuid(imported.uuid) ?: imported

@@ -2,8 +2,12 @@ package app.vellum.reader.shared
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookEntity
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -16,7 +20,10 @@ data class SharedLibraryUiState(
     val libraries: List<SharedLibrarySummary> = emptyList(),
     val activeLibrary: SharedLibrarySummary? = null,
     val publications: List<SharedPublication> = emptyList(),
+    val allPublications: List<SharedPublication> = emptyList(),
     val localBooks: List<BookEntity> = emptyList(),
+    val sharedLocalBookUuids: Set<String> = emptySet(),
+    val matchingSharedBooks: Boolean = false,
     val selectedLocalBooks: Set<String> = emptySet(),
     val searchQuery: String = "",
     val loading: Boolean = false,
@@ -30,6 +37,8 @@ data class SharedLibraryUiState(
 
 class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
     private val repository = app.sharedLibraryRepository
+    private val localSha256Cache = mutableMapOf<String, String>()
+    private var sharedBookMatchJob: Job? = null
     private val _state = MutableStateFlow(
         SharedLibraryUiState(
             configured = repository.api.configured,
@@ -59,6 +68,7 @@ class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
                         selectedLocalBooks = current.selectedLocalBooks.intersect(books.mapTo(mutableSetOf()) { it.uuid }),
                     )
                 }
+                matchSharedLocalBooks()
             }
         }
     }
@@ -74,12 +84,27 @@ class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
         val active = libraries.firstOrNull { it.uuid == previousId } ?: libraries.firstOrNull()
         _state.update { it.copy(libraries = libraries, activeLibrary = active) }
         if (active != null) refreshPublicationsInternal(active.uuid)
-        else _state.update { it.copy(publications = emptyList()) }
+        else {
+            _state.update {
+                it.copy(
+                    publications = emptyList(),
+                    allPublications = emptyList(),
+                    sharedLocalBookUuids = emptySet(),
+                )
+            }
+        }
     }
 
     fun selectLibrary(library: SharedLibrarySummary) = launchAction {
         _state.update {
-            it.copy(activeLibrary = library, publications = emptyList(), searchQuery = "")
+            it.copy(
+                activeLibrary = library,
+                publications = emptyList(),
+                allPublications = emptyList(),
+                sharedLocalBookUuids = emptySet(),
+                selectedLocalBooks = emptySet(),
+                searchQuery = "",
+            )
         }
         refreshPublicationsInternal(library.uuid)
     }
@@ -132,6 +157,7 @@ class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
 
     fun toggleLocalBook(uuid: String) {
         _state.update {
+            if (uuid in it.sharedLocalBookUuids) return@update it
             val selected = if (uuid in it.selectedLocalBooks) {
                 it.selectedLocalBooks - uuid
             } else {
@@ -143,6 +169,15 @@ class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
 
     fun clearLocalSelection() {
         _state.update { it.copy(selectedLocalBooks = emptySet()) }
+    }
+
+    fun selectLocalBooks(uuids: Set<String>) {
+        _state.update {
+            it.copy(
+                selectedLocalBooks = it.selectedLocalBooks +
+                    (uuids - it.sharedLocalBookUuids),
+            )
+        }
     }
 
     fun publishSelected(onFinished: () -> Unit) = launchAction {
@@ -200,8 +235,79 @@ class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
     }
 
     private suspend fun refreshPublicationsInternal(libraryUuid: String) {
-        val publications = repository.publications(libraryUuid, _state.value.searchQuery)
-        _state.update { it.copy(publications = publications) }
+        val query = _state.value.searchQuery
+        val allPublications = repository.publications(libraryUuid)
+        val publications = if (query.isBlank()) {
+            allPublications
+        } else {
+            repository.publications(libraryUuid, query)
+        }
+        _state.update {
+            it.copy(
+                publications = publications,
+                allPublications = allPublications,
+            )
+        }
+        matchSharedLocalBooks()
+    }
+
+    private fun matchSharedLocalBooks() {
+        sharedBookMatchJob?.cancel()
+        val snapshot = _state.value
+        val libraryUuid = snapshot.activeLibrary?.uuid
+        if (libraryUuid == null || snapshot.allPublications.isEmpty() || snapshot.localBooks.isEmpty()) {
+            _state.update {
+                it.copy(
+                    sharedLocalBookUuids = emptySet(),
+                    matchingSharedBooks = false,
+                )
+            }
+            return
+        }
+        val publications = snapshot.allPublications
+        val books = snapshot.localBooks
+        _state.update { it.copy(matchingSharedBooks = true) }
+        sharedBookMatchJob = viewModelScope.launch(Dispatchers.IO) {
+            val remoteBySize = publications.groupBy { it.sizeBytes }
+            val remoteIds = publications.mapTo(mutableSetOf()) { it.uuid }
+            val learnedFingerprints = mutableMapOf<String, String>()
+            val matches = books.mapNotNullTo(mutableSetOf()) { book ->
+                if (
+                    book.sourceLibraryUuid == libraryUuid &&
+                    book.sourcePublicationUuid in remoteIds
+                ) {
+                    return@mapNotNullTo book.uuid
+                }
+                val file = File(app.booksDir, book.fileName)
+                val candidates = remoteBySize[file.takeIf(File::isFile)?.length()] ?: return@mapNotNullTo null
+                val cacheKey = "${file.absolutePath}:${file.length()}:${file.lastModified()}"
+                val sha256 = book.contentSha256 ?: localSha256Cache.getOrPut(cacheKey) {
+                    repository.api.sha256(file)
+                }.also { learnedFingerprints[book.uuid] = it }
+                book.uuid.takeIf { uuid -> candidates.any { it.sha256.equals(sha256, ignoreCase = true) } }
+            }
+            _state.update { current ->
+                if (
+                    current.activeLibrary?.uuid != libraryUuid ||
+                    current.allPublications.mapTo(mutableSetOf()) { it.uuid } != remoteIds
+                ) {
+                    current
+                } else {
+                    current.copy(
+                        sharedLocalBookUuids = matches,
+                        selectedLocalBooks = current.selectedLocalBooks - matches,
+                        matchingSharedBooks = false,
+                    )
+                }
+            }
+            if (learnedFingerprints.isNotEmpty()) {
+                app.database.withTransaction {
+                    learnedFingerprints.forEach { (uuid, sha256) ->
+                        app.bookDao.setContentSha256(uuid, sha256)
+                    }
+                }
+            }
+        }
     }
 
     private fun launchAction(block: suspend () -> Unit) {

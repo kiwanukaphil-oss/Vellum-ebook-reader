@@ -84,6 +84,11 @@ interface BookDao {
         updatedAt: Long,
     )
 
+    // Derived from the immutable book file. Do not bump updatedAt: this is
+    // local transport metadata, not a user-visible bibliographic edit.
+    @Query("UPDATE books SET contentSha256 = :sha256 WHERE uuid = :uuid")
+    suspend fun setContentSha256(uuid: String, sha256: String)
+
     /** Soft delete: tombstone for future sync; the caller removes the files. */
     @Query("UPDATE books SET deletedAt = :deletedAt, updatedAt = :deletedAt WHERE uuid = :uuid")
     suspend fun softDelete(uuid: String, deletedAt: Long)

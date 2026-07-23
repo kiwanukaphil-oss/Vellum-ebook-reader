@@ -179,9 +179,12 @@ class SyncEngine(private val app: VellumApp) {
 
     private suspend fun applyLocally(merged: Bundle) {
         val localBooks = app.bookDao.allRaw().associateBy { it.uuid }
-        // Covers are device-local (never in the bundle); keep ours on overwrite.
+        // Covers and content fingerprints are device-local; keep ours on overwrite.
         val books = merged.books.map { book ->
-            book.copy(coverPath = localBooks[book.uuid]?.coverPath)
+            book.copy(
+                coverPath = localBooks[book.uuid]?.coverPath,
+                contentSha256 = localBooks[book.uuid]?.contentSha256,
+            )
         }
         app.database.withTransaction {
             app.bookDao.upsertAll(books)

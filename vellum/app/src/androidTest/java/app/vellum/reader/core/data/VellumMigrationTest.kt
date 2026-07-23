@@ -11,6 +11,53 @@ import org.junit.Test
 
 class VellumMigrationTest {
     @Test
+    fun migrationTenToElevenAddsCachedContentFingerprintWithoutChangingBooks() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "migration-10-11-${System.nanoTime()}.db"
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(databaseName)
+                .callback(
+                    object : SupportSQLiteOpenHelper.Callback(10) {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            db.execSQL(
+                                "CREATE TABLE books (" +
+                                    "uuid TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, fileName TEXT NOT NULL)",
+                            )
+                        }
+
+                        override fun onUpgrade(
+                            db: SupportSQLiteDatabase,
+                            oldVersion: Int,
+                            newVersion: Int,
+                        ) = Unit
+                    },
+                )
+                .build(),
+        )
+
+        try {
+            val database = helper.writableDatabase
+            database.execSQL("INSERT INTO books VALUES ('existing', 'Existing book', 'existing.epub')")
+
+            VellumDatabase.MIGRATION_10_11.migrate(database)
+
+            assertTrue(columnNames(database, "books").contains("contentSha256"))
+            database.query(
+                "SELECT title, fileName, contentSha256 FROM books WHERE uuid = 'existing'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("Existing book", cursor.getString(0))
+                assertEquals("existing.epub", cursor.getString(1))
+                assertTrue(cursor.isNull(2))
+            }
+        } finally {
+            helper.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
+    @Test
     fun migrationNineToTenAddsReversibleAiLibrarianHistoryWithoutChangingBooks() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val databaseName = "migration-9-10-${System.nanoTime()}.db"

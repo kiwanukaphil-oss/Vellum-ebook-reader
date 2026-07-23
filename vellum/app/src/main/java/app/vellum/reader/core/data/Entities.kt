@@ -35,6 +35,8 @@ data class BookEntity(
     /** Optional provenance for durable downloads from a Vellum Shared Library. */
     val sourceLibraryUuid: String? = null,
     val sourcePublicationUuid: String? = null,
+    /** Device-local content fingerprint used to match books already published. */
+    val contentSha256: String? = null,
 )
 
 /**

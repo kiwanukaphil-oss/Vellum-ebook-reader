@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AiMetadataSuggestionEntity::class,
         BookTextFts::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 abstract class VellumDatabase : RoomDatabase() {
@@ -36,6 +36,13 @@ abstract class VellumDatabase : RoomDatabase() {
     abstract fun aiMetadataDao(): AiMetadataDao
 
     companion object {
+        /** v10 -> v11: cached immutable fingerprints for scalable publication matching. */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `books` ADD COLUMN `contentSha256` TEXT")
+            }
+        }
+
         /** v9 -> v10: local, reversible AI Librarian suggestion history. */
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {

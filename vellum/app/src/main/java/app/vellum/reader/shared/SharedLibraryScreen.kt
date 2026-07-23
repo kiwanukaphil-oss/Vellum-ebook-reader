@@ -42,6 +42,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -267,9 +268,13 @@ fun SharedLibraryScreen(onBack: () -> Unit) {
     if (publishOpen) {
         PublishBooksDialog(
             books = state.localBooks,
+            sharedBookUuids = state.sharedLocalBookUuids,
             selected = state.selectedLocalBooks,
             loading = state.loading,
+            matchingSharedBooks = state.matchingSharedBooks,
             onToggle = viewModel::toggleLocalBook,
+            onSelect = viewModel::selectLocalBooks,
+            onClearSelection = viewModel::clearLocalSelection,
             onDismiss = {
                 publishOpen = false
                 viewModel.clearLocalSelection()
@@ -705,34 +710,209 @@ private fun InvitationDialog(
     )
 }
 
+private enum class PublishBookFilter(val label: String) {
+    NOT_SHARED("Not shared"),
+    SHARED("Already shared"),
+    ALL("All"),
+}
+
+private enum class PublishBookSort(val label: String) {
+    NEWEST("Newest added"),
+    TITLE("Title A–Z"),
+    AUTHOR("Author A–Z"),
+}
+
 @Composable
 private fun PublishBooksDialog(
     books: List<BookEntity>,
+    sharedBookUuids: Set<String>,
     selected: Set<String>,
     loading: Boolean,
+    matchingSharedBooks: Boolean,
     onToggle: (String) -> Unit,
+    onSelect: (Set<String>) -> Unit,
+    onClearSelection: () -> Unit,
     onDismiss: () -> Unit,
     onPublish: () -> Unit,
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf(PublishBookFilter.NOT_SHARED) }
+    var sort by rememberSaveable { mutableStateOf(PublishBookSort.NEWEST) }
+    var sortMenuOpen by remember { mutableStateOf(false) }
+    val notSharedCount = books.count { it.uuid !in sharedBookUuids }
+    val sharedCount = books.size - notSharedCount
+    val visibleBooks = remember(books, sharedBookUuids, query, filter, sort) {
+        val normalizedQuery = query.trim().lowercase()
+        books.asSequence()
+            .filter { book ->
+                when (filter) {
+                    PublishBookFilter.NOT_SHARED -> book.uuid !in sharedBookUuids
+                    PublishBookFilter.SHARED -> book.uuid in sharedBookUuids
+                    PublishBookFilter.ALL -> true
+                }
+            }
+            .filter { book ->
+                normalizedQuery.isBlank() ||
+                    book.title.lowercase().contains(normalizedQuery) ||
+                    book.author.lowercase().contains(normalizedQuery) ||
+                    book.seriesName?.lowercase()?.contains(normalizedQuery) == true
+            }
+            .let { candidates ->
+                when (sort) {
+                    PublishBookSort.NEWEST -> candidates.sortedWith(
+                        compareByDescending<BookEntity> { it.addedAt }
+                            .thenBy { it.title.lowercase() }
+                            .thenBy { it.uuid },
+                    )
+                    PublishBookSort.TITLE -> candidates.sortedWith(
+                        compareBy<BookEntity> { it.title.lowercase() }
+                            .thenBy { it.author.lowercase() }
+                            .thenBy { it.uuid },
+                    )
+                    PublishBookSort.AUTHOR -> candidates.sortedWith(
+                        compareBy<BookEntity> { it.author.lowercase() }
+                            .thenBy { it.title.lowercase() }
+                            .thenBy { it.uuid },
+                    )
+                }
+            }
+            .toList()
+    }
+    val selectableVisible = visibleBooks.mapNotNullTo(mutableSetOf()) {
+        it.uuid.takeUnless(sharedBookUuids::contains)
+    }
+    val allVisibleSelected = selectableVisible.isNotEmpty() && selectableVisible.all(selected::contains)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Publish from My Library", fontFamily = Fraunces) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "Choose one or more books. Vellum carries across the title, author, category, genres, series, and cover.",
+                    "Choose books that have not been shared here yet.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search title, author, or series") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        FilterChip(
+                            selected = filter == PublishBookFilter.NOT_SHARED,
+                            onClick = { filter = PublishBookFilter.NOT_SHARED },
+                            label = { Text("Not shared ($notSharedCount)") },
+                        )
+                    }
+                    item {
+                        FilterChip(
+                            selected = filter == PublishBookFilter.SHARED,
+                            onClick = { filter = PublishBookFilter.SHARED },
+                            label = { Text("Already shared ($sharedCount)") },
+                        )
+                    }
+                    item {
+                        FilterChip(
+                            selected = filter == PublishBookFilter.ALL,
+                            onClick = { filter = PublishBookFilter.ALL },
+                            label = { Text("All (${books.size})") },
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${visibleBooks.size} shown",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box {
+                        TextButton(onClick = { sortMenuOpen = true }) {
+                            Text(sort.label)
+                            Icon(Icons.Filled.ExpandMore, contentDescription = "Change book order")
+                        }
+                        DropdownMenu(
+                            expanded = sortMenuOpen,
+                            onDismissRequest = { sortMenuOpen = false },
+                        ) {
+                            PublishBookSort.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    onClick = {
+                                        sort = option
+                                        sortMenuOpen = false
+                                    },
+                                    leadingIcon = {
+                                        if (sort == option) {
+                                            Icon(Icons.Filled.Check, contentDescription = null)
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (selectableVisible.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (selected.isEmpty()) "Select individual books or all shown." else "${selected.size} selected",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                if (allVisibleSelected) onClearSelection() else onSelect(selectableVisible)
+                            },
+                            enabled = !loading && !matchingSharedBooks,
+                        ) {
+                            Text(if (allVisibleSelected) "Clear selection" else "Select all shown")
+                        }
+                    }
+                }
+                if (matchingSharedBooks) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "Checking what is already shared…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (books.isEmpty()) {
                     Text("My Library has no books yet.")
+                } else if (visibleBooks.isEmpty()) {
+                    Text(
+                        when {
+                            query.isNotBlank() -> "No books match this search."
+                            filter == PublishBookFilter.NOT_SHARED -> "Everything in My Library is already shared here."
+                            filter == PublishBookFilter.SHARED -> "No books from My Library have been shared here yet."
+                            else -> "There are no books to show."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 24.dp),
+                    )
                 } else {
-                    LazyColumn(modifier = Modifier.height(360.dp)) {
-                        items(books, key = { it.uuid }) { book ->
+                    LazyColumn(modifier = Modifier.height(330.dp)) {
+                        items(visibleBooks, key = { it.uuid }) { book ->
+                            val alreadyShared = book.uuid in sharedBookUuids
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onToggle(book.uuid) }
+                                    .clickable(
+                                        enabled = !alreadyShared && !loading && !matchingSharedBooks,
+                                    ) { onToggle(book.uuid) }
                                     .padding(vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -755,22 +935,36 @@ private fun PublishBooksDialog(
                                         maxLines = 1,
                                     )
                                 }
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (book.uuid in selected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceContainerHighest
-                                    },
-                                    modifier = Modifier.size(28.dp),
-                                ) {
-                                    if (book.uuid in selected) {
-                                        Icon(
-                                            Icons.Filled.Check,
-                                            contentDescription = "Selected",
-                                            tint = MaterialTheme.colorScheme.onPrimary,
-                                            modifier = Modifier.padding(5.dp),
+                                if (alreadyShared) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                    ) {
+                                        Text(
+                                            "Shared",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
                                         )
+                                    }
+                                } else {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (book.uuid in selected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceContainerHighest
+                                        },
+                                        modifier = Modifier.size(28.dp),
+                                    ) {
+                                        if (book.uuid in selected) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = "Selected",
+                                                tint = MaterialTheme.colorScheme.onPrimary,
+                                                modifier = Modifier.padding(5.dp),
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -782,7 +976,7 @@ private fun PublishBooksDialog(
         confirmButton = {
             Button(
                 onClick = onPublish,
-                enabled = selected.isNotEmpty() && !loading,
+                enabled = selected.isNotEmpty() && !loading && !matchingSharedBooks,
             ) { Text("Publish ${selected.size}") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
