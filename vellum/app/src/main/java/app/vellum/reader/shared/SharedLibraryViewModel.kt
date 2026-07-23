@@ -162,7 +162,7 @@ class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
                     result.published > 0 -> "Published ${result.published}; ${result.failures.size} need attention."
                     else -> null
                 },
-                error = result.failures.takeIf(List<String>::isNotEmpty)?.joinToString("\n"),
+                error = result.failures.takeIf(List<String>::isNotEmpty)?.let(::publishFailureNotice),
             )
         }
         refreshPublicationsInternal(library.uuid)
@@ -223,3 +223,10 @@ class SharedLibraryViewModel(private val app: VellumApp) : ViewModel() {
         }
     }
 }
+
+private fun publishFailureNotice(failures: List<String>): String =
+    if (failures.size == 1) {
+        failures.first().take(220)
+    } else {
+        "${failures.size} books could not be published. First issue: ${failures.first()}".take(220)
+    }

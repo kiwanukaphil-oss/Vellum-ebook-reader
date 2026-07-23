@@ -196,10 +196,10 @@ class SharedLibraryApi(
                 .put("p_title", title)
                 .put("p_author", author)
                 .put("p_format", format)
-                .put("p_category", category)
+                .put("p_category", category ?: JSONObject.NULL)
                 .put("p_genres", JSONArray(genres))
-                .put("p_series_name", seriesName)
-                .put("p_series_index", seriesIndex)
+                .put("p_series_name", seriesName ?: JSONObject.NULL)
+                .put("p_series_index", seriesIndex ?: JSONObject.NULL)
                 .put("p_original_file_name", originalFileName)
                 .put("p_sha256", sha256)
                 .put("p_size_bytes", sizeBytes),
@@ -402,16 +402,20 @@ class SharedLibraryApi(
             json.optString("message").ifBlank { json.optString("error_description") }
                 .ifBlank { json.optString("error") }
         }.getOrDefault("")
+        val code = runCatching { JSONObject(text).optString("code") }.getOrDefault("")
         return SharedLibraryException(
-            message.ifBlank {
-                when (status) {
-                    401 -> "Please sign in again."
-                    403 -> "You do not have permission to do that."
-                    404 -> "That shared item is no longer available."
-                    409 -> "That book is already in this shared library."
-                    413 -> "That file is too large for the household library."
-                    else -> "The shared library could not be reached ($status)."
-                }
+            when (code) {
+                "PGRST202" -> "Vellum could not prepare this book for upload. Please update the app and try again."
+                else -> message.ifBlank {
+                    when (status) {
+                        401 -> "Please sign in again."
+                        403 -> "You do not have permission to do that."
+                        404 -> "That shared item is no longer available."
+                        409 -> "That book is already in this shared library."
+                        413 -> "That file is too large for the household library."
+                        else -> "The shared library could not be reached ($status)."
+                    }
+                }.take(MAX_PUBLIC_ERROR_CHARACTERS)
             },
         )
     }
@@ -479,6 +483,7 @@ class SharedLibraryApi(
     }
 
     private companion object {
+        const val MAX_PUBLIC_ERROR_CHARACTERS = 220
         const val AUTH_REDIRECT = "vellum://auth/callback"
     }
 }
