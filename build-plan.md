@@ -2,6 +2,8 @@
 
 Companion to [premium-ebook-app-prompt.md](premium-ebook-app-prompt.md). That document defines *what* we're building; this one defines *how* and *in what order*. Nothing from the scope doc is cut — every feature appears in the feature map below with a phase number.
 
+The completed local-first plan is extended by the separately gated [Vellum Shared Libraries roadmap](shared-library-roadmap.md), covering optional identity, invitations, private online catalogues, publishing, storage, and downloads in Phases 10A–10G.
+
 Name candidates (decide any time before release-to-self): **Vellum**, **Foliant**, **Hearthbook**, **Leafline**. "Vellum" is used as the working title throughout.
 
 ---
