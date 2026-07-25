@@ -43,7 +43,54 @@ data class SharedPublication(
     val sha256: String,
     val sizeBytes: Long,
     val createdAt: String,
+    val updatedAt: String,
     val status: String,
+    val collectionNames: List<String>,
+)
+
+enum class SharedCatalogueTab(val label: String) {
+    BOOKS("Books"),
+    COLLECTIONS("Collections"),
+    ARCHIVED("Archived"),
+}
+
+enum class SharedCatalogueView(val label: String) {
+    GRID("Grid"),
+    LIST("List"),
+}
+
+enum class SharedCatalogueSort(val label: String) {
+    RECENT("Recently added"),
+    TITLE("Title"),
+    AUTHOR("Author"),
+    SERIES("Series"),
+}
+
+enum class SharedCatalogueFilter(val label: String) {
+    ALL("All"),
+    DOWNLOADED("Downloaded"),
+    NOT_DOWNLOADED("Not downloaded"),
+}
+
+data class SharedCollection(
+    val uuid: String,
+    val libraryUuid: String,
+    val name: String,
+    val kind: String,
+    val description: String?,
+    val publicationUuids: List<String>,
+    val bookCount: Int,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+data class SharedPublicationEdit(
+    val title: String,
+    val author: String,
+    val category: String?,
+    val genres: List<String>,
+    val seriesName: String?,
+    val seriesIndex: Float?,
 )
 
 data class SharedInvitation(

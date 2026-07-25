@@ -277,7 +277,15 @@ class SyncEngine(private val app: VellumApp) {
             positions = arr("positions").map { it.toPosition() },
             annotations = arr("annotations").map { it.toAnnotation() },
             collections = arr("collections").map {
-                CollectionEntity(it.getString("uuid"), it.getString("name"), it.getLong("createdAt"), it.getLong("updatedAt"), it.optLongOrNull("deletedAt"))
+                CollectionEntity(
+                    uuid = it.getString("uuid"),
+                    name = it.getString("name"),
+                    kind = it.optString("kind", "manual").ifBlank { "manual" },
+                    description = it.optString("description").takeIf(String::isNotBlank),
+                    createdAt = it.getLong("createdAt"),
+                    updatedAt = it.getLong("updatedAt"),
+                    deletedAt = it.optLongOrNull("deletedAt"),
+                )
             },
             tags = arr("tags").map {
                 TagEntity(it.getString("uuid"), it.getString("name"), it.getLong("createdAt"), it.getLong("updatedAt"), it.optLongOrNull("deletedAt"))
@@ -338,6 +346,7 @@ class SyncEngine(private val app: VellumApp) {
             JSONArray(
                 bundle.collections.map {
                     JSONObject().put("uuid", it.uuid).put("name", it.name).put("createdAt", it.createdAt)
+                        .put("kind", it.kind).putOpt("description", it.description)
                         .put("updatedAt", it.updatedAt).putOpt("deletedAt", it.deletedAt)
                 },
             ),

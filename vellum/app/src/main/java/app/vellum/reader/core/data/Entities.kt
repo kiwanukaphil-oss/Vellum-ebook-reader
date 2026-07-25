@@ -128,6 +128,8 @@ data class PdfStrokeEntity(
 data class CollectionEntity(
     @PrimaryKey val uuid: String,
     val name: String,
+    val kind: String = "manual",
+    val description: String? = null,
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,

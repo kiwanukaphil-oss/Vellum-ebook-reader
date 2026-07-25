@@ -46,6 +46,7 @@ class VellumApp : Application() {
                 VellumDatabase.MIGRATION_8_9,
                 VellumDatabase.MIGRATION_9_10,
                 VellumDatabase.MIGRATION_10_11,
+                VellumDatabase.MIGRATION_11_12,
             )
             .build()
     }

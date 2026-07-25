@@ -55,8 +55,10 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,6 +69,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -99,6 +102,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.BookEntity
+import app.vellum.reader.core.data.CollectionEntity
 import app.vellum.reader.core.settings.ReaderSettings
 import app.vellum.reader.core.theme.Fraunces
 import app.vellum.reader.core.theme.PlexMono
@@ -134,6 +138,8 @@ fun LibraryScreen(
     var addBooksOpen by rememberSaveable { mutableStateOf(false) }
     var aiLibrarianOpen by rememberSaveable { mutableStateOf(false) }
     var nearbyMode by rememberSaveable { mutableStateOf<NearbyTransferMode?>(null) }
+    var collectionToEdit by remember { mutableStateOf<CollectionEntity?>(null) }
+    var collectionToRemove by remember { mutableStateOf<CollectionEntity?>(null) }
     val settings by app.settingsStore.settings.collectAsState(initial = ReaderSettings())
     val syncStatus by viewModel.syncStatus.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
@@ -395,6 +401,7 @@ fun LibraryScreen(
                         viewModel.clearLibraryFilters()
                         activeTab = LibraryTab.ALL_BOOKS
                     },
+                    onEditCollection = { collectionToEdit = it },
                 )
             }
         }
@@ -484,6 +491,55 @@ fun LibraryScreen(
             dismissButton = { TextButton(onClick = { confirmBatchDelete = false }) { Text("Cancel") } },
         )
     }
+    collectionToEdit?.let { collection ->
+        val memberUuids = state.allBooks
+            .filter { collection.uuid in state.collectionsByBook[it.uuid].orEmpty() }
+            .mapTo(mutableSetOf()) { it.uuid }
+        LocalCollectionEditorDialog(
+            collection = collection,
+            books = state.allBooks,
+            initiallySelected = memberUuids,
+            duplicateName = { name ->
+                state.collections.any {
+                    it.uuid != collection.uuid && it.name.trim().equals(name.trim(), ignoreCase = true)
+                }
+            },
+            onDismiss = { collectionToEdit = null },
+            onSave = { name, kind, description, bookUuids ->
+                viewModel.saveCollection(
+                    collectionUuid = collection.uuid,
+                    name = name,
+                    kind = kind,
+                    description = description,
+                    bookUuids = bookUuids,
+                    onFinished = { collectionToEdit = null },
+                )
+            },
+            onRemove = {
+                collectionToEdit = null
+                collectionToRemove = collection
+            },
+        )
+    }
+    collectionToRemove?.let { collection ->
+        AlertDialog(
+            onDismissRequest = { collectionToRemove = null },
+            title = { Text("Remove “${collection.name}”?") },
+            text = { Text("The collection will be removed, but every book will remain in your library.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.removeCollection(collection) { collectionToRemove = null }
+                    },
+                ) {
+                    Text("Remove collection", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { collectionToRemove = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -547,6 +603,13 @@ private fun BrowseLibrary(
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
     val categoryColumns = if (maxWidth >= 700.dp) 4 else 2
+    val categoryCardWidth = (minOf(maxWidth, 1200.dp) - 32.dp - ((categoryColumns - 1) * 10).dp) /
+        categoryColumns
+    val populatedCategories = BookCategories.all.mapNotNull { category ->
+        state.allBooks.filter { it.category == category }
+            .takeIf { it.isNotEmpty() }
+            ?.let { books -> category to books }
+    }
     LazyColumn(
         contentPadding = PaddingValues(bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -573,21 +636,19 @@ private fun BrowseLibrary(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SectionHeading("BROWSE BY CATEGORY")
-                BookCategories.all.chunked(categoryColumns).forEach { rowCategories ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                if (populatedCategories.isNotEmpty()) {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        rowCategories.forEach { category ->
-                            val books = state.allBooks.filter { it.category == category }
+                        items(populatedCategories, key = { it.first }) { (category, books) ->
                             CategoryCard(
                                 category = category,
                                 books = books,
                                 onClick = { onOpenCategory(category) },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.width(categoryCardWidth),
                             )
                         }
-                        repeat(categoryColumns - rowCategories.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
                 if (state.uncategorizedCount > 0) {
@@ -747,6 +808,7 @@ private fun CollectionsLibrary(
     state: LibraryState,
     onOpenCollection: (String) -> Unit,
     onShowAll: () -> Unit,
+    onEditCollection: (CollectionEntity) -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
     val columns = if (maxWidth >= 700.dp) 2 else 1
@@ -773,6 +835,7 @@ private fun CollectionsLibrary(
                 books = state.allBooks,
                 supporting = "Every book, in one place",
                 onClick = onShowAll,
+                onEdit = null,
             )
         }
         items(state.collections, key = { it.uuid }) { collection ->
@@ -780,8 +843,14 @@ private fun CollectionsLibrary(
             CollectionCard(
                 name = collection.name,
                 books = books,
-                supporting = "${books.size} ${if (books.size == 1) "book" else "books"}",
+                supporting = buildString {
+                    append("${books.size} ${if (books.size == 1) "book" else "books"}")
+                    if (collection.kind != "manual") {
+                        append(" · ${collection.kind.replaceFirstChar(Char::uppercase)}")
+                    }
+                },
                 onClick = { onOpenCollection(collection.uuid) },
+                onEdit = { onEditCollection(collection) },
             )
         }
         if (state.collections.isEmpty()) {
@@ -898,11 +967,170 @@ private fun CategoryCard(
 }
 
 @Composable
+private fun LocalCollectionEditorDialog(
+    collection: CollectionEntity,
+    books: List<BookEntity>,
+    initiallySelected: Set<String>,
+    duplicateName: (String) -> Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String?, Set<String>) -> Unit,
+    onRemove: () -> Unit,
+) {
+    var name by remember(collection.uuid) { mutableStateOf(collection.name) }
+    var kind by remember(collection.uuid) { mutableStateOf(collection.kind) }
+    var description by remember(collection.uuid) { mutableStateOf(collection.description.orEmpty()) }
+    var selected by remember(collection.uuid, initiallySelected) { mutableStateOf(initiallySelected) }
+    val cleanName = name.trim()
+    val nameAlreadyUsed = cleanName.isNotEmpty() && duplicateName(cleanName)
+    val kinds = listOf(
+        "manual" to "Manual",
+        "series" to "Series",
+        "author" to "Author",
+        "theme" to "Theme",
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit collection", fontFamily = Fraunces) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { if (it.length <= 80) name = it },
+                    label = { Text("Collection name") },
+                    supportingText = if (nameAlreadyUsed) {
+                        { Text("A collection with this name already exists.") }
+                    } else {
+                        null
+                    },
+                    isError = nameAlreadyUsed,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(kinds, key = { it.first }) { (value, label) ->
+                        FilterChip(
+                            selected = kind == value,
+                            onClick = { kind = value },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { if (it.length <= 280) description = it },
+                    label = { Text("Short description") },
+                    supportingText = { Text("${description.length}/280") },
+                    minLines = 2,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${selected.size} ${if (selected.size == 1) "book" else "books"} selected",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    TextButton(
+                        onClick = {
+                            selected = if (selected.size == books.size) {
+                                emptySet()
+                            } else {
+                                books.mapTo(mutableSetOf()) { it.uuid }
+                            }
+                        },
+                    ) {
+                        Text(if (selected.size == books.size) "Clear all" else "Select all")
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().height(280.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(books, key = { it.uuid }) { book ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .combinedClickable(
+                                    onClick = {
+                                        selected = if (book.uuid in selected) {
+                                            selected - book.uuid
+                                        } else {
+                                            selected + book.uuid
+                                        }
+                                    },
+                                    onLongClick = null,
+                                )
+                                .padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = book.uuid in selected,
+                                onCheckedChange = {
+                                    selected = if (book.uuid in selected) {
+                                        selected - book.uuid
+                                    } else {
+                                        selected + book.uuid
+                                    }
+                                },
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    book.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    book.author,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        cleanName,
+                        kind,
+                        description.trim().ifBlank { null },
+                        selected,
+                    )
+                },
+                enabled = cleanName.isNotEmpty() && !nameAlreadyUsed,
+            ) {
+                Text("Save collection")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onRemove) {
+                    Text("Remove", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+}
+
+@Composable
 private fun CollectionCard(
     name: String,
     books: List<BookEntity>,
     supporting: String,
     onClick: () -> Unit,
+    onEdit: (() -> Unit)?,
 ) {
     Card(
         onClick = onClick,
@@ -915,6 +1143,18 @@ private fun CollectionCard(
             Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
                 Text(name, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(supporting, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (onEdit != null) {
+                    Text(
+                        "Tap to browse",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (onEdit != null) {
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Filled.Edit, contentDescription = "Edit $name")
+                }
             }
         }
     }

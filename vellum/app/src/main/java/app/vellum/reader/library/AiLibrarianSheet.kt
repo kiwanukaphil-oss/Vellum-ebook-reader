@@ -87,7 +87,7 @@ fun AiLibrarianSheet(
                 Column {
                     Text("AI Librarian", style = MaterialTheme.typography.headlineSmall, fontFamily = Fraunces)
                     Text(
-                        "Quietly names and organises your books.",
+                        "Names books, discovers series, and shapes thoughtful shelves.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -116,14 +116,14 @@ fun AiLibrarianSheet(
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     when {
-                                        busy -> "Organising your shelves…"
+                                        busy -> "Curating your library…"
                                         pending.isNotEmpty() -> "${pending.size} ${if (pending.size == 1) "book needs" else "books need"} a quick look"
                                         else -> "Everything is in its place"
                                     },
                                     style = MaterialTheme.typography.titleMedium,
                                 )
                                 Text(
-                                    "High-confidence changes happen automatically. Every applied change remains undoable.",
+                                    "Vellum also creates useful series, author, and thematic collections—without one-book clutter.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

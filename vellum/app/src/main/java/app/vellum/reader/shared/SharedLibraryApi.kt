@@ -3,6 +3,10 @@ package app.vellum.reader.shared
 import android.net.Uri
 import android.util.Base64
 import app.vellum.reader.BuildConfig
+import app.vellum.reader.librarian.AiCollectionKind
+import app.vellum.reader.librarian.AiCollectionProposal
+import app.vellum.reader.librarian.AiCurationBook
+import app.vellum.reader.librarian.AiCurationResult
 import app.vellum.reader.librarian.AiEnrichmentRequest
 import app.vellum.reader.librarian.AiEnrichmentResult
 import java.io.File
@@ -117,6 +121,97 @@ class SharedLibraryApi(
                 .put("p_query", query.trim()),
             accessToken,
         ).map(::publicationFromJson)
+
+    suspend fun archivedPublications(
+        libraryUuid: String,
+        accessToken: String,
+    ): List<SharedPublication> =
+        rpcArray(
+            "list_archived_library_publications",
+            JSONObject().put("p_library_id", libraryUuid),
+            accessToken,
+        ).map(::publicationFromJson)
+
+    suspend fun collections(
+        libraryUuid: String,
+        accessToken: String,
+    ): List<SharedCollection> =
+        rpcArray(
+            "list_library_collections",
+            JSONObject().put("p_library_id", libraryUuid),
+            accessToken,
+        ).map(::collectionFromJson)
+
+    suspend fun updatePublication(
+        publicationUuid: String,
+        edit: SharedPublicationEdit,
+        accessToken: String,
+    ) {
+        rpcArray(
+            "update_library_publication",
+            JSONObject()
+                .put("p_publication_id", publicationUuid)
+                .put("p_title", edit.title.trim())
+                .put("p_author", edit.author.trim())
+                .put("p_category", edit.category?.trim()?.ifBlank { null } ?: JSONObject.NULL)
+                .put("p_genres", JSONArray(edit.genres))
+                .put("p_series_name", edit.seriesName?.trim()?.ifBlank { null } ?: JSONObject.NULL)
+                .put("p_series_index", edit.seriesIndex ?: JSONObject.NULL),
+            accessToken,
+        )
+    }
+
+    suspend fun setPublicationsArchived(
+        libraryUuid: String,
+        publicationUuids: Collection<String>,
+        archived: Boolean,
+        accessToken: String,
+    ): Int =
+        rpcArray(
+            "set_library_publications_archived",
+            JSONObject()
+                .put("p_library_id", libraryUuid)
+                .put("p_publication_ids", JSONArray(publicationUuids.toList()))
+                .put("p_archived", archived),
+            accessToken,
+        ).firstOrNull()?.optInt("changed_count") ?: 0
+
+    suspend fun upsertCollection(
+        libraryUuid: String,
+        collectionUuid: String?,
+        name: String,
+        kind: String,
+        description: String?,
+        publicationUuids: Collection<String>,
+        accessToken: String,
+    ): String {
+        val row = rpcArray(
+            "upsert_library_collection",
+            JSONObject()
+                .put("p_library_id", libraryUuid)
+                .put("p_collection_id", collectionUuid ?: JSONObject.NULL)
+                .put("p_name", name.trim())
+                .put("p_kind", kind)
+                .put("p_description", description?.trim()?.ifBlank { null } ?: JSONObject.NULL)
+                .put("p_publication_ids", JSONArray(publicationUuids.toList())),
+            accessToken,
+        ).firstOrNull() ?: throw SharedLibraryException("The collection could not be saved.")
+        return row.getString("collection_uuid")
+    }
+
+    suspend fun archiveCollection(
+        libraryUuid: String,
+        collectionUuid: String,
+        accessToken: String,
+    ) {
+        rpcArray(
+            "archive_library_collection",
+            JSONObject()
+                .put("p_library_id", libraryUuid)
+                .put("p_collection_id", collectionUuid),
+            accessToken,
+        )
+    }
 
     suspend fun createLibrary(
         name: String,
@@ -305,6 +400,54 @@ class SharedLibraryApi(
         )
     }
 
+    suspend fun curateLibrary(
+        books: List<AiCurationBook>,
+        accessToken: String,
+    ): AiCurationResult = withContext(Dispatchers.IO) {
+        requireConfigured()
+        val response = requestJson(
+            url = "$booksApiUrl/v1/librarian/curate",
+            method = "POST",
+            body = JSONObject().put(
+                "books",
+                JSONArray().apply {
+                    books.forEach { book ->
+                        put(
+                            JSONObject()
+                                .put("id", book.id)
+                                .put("title", book.title)
+                                .put("author", book.author)
+                                .put("category", book.category ?: JSONObject.NULL)
+                                .put("genres", JSONArray(book.genres))
+                                .put("seriesName", book.seriesName ?: JSONObject.NULL)
+                                .put("seriesIndex", book.seriesIndex ?: JSONObject.NULL),
+                        )
+                    }
+                },
+            ),
+            accessToken = accessToken,
+        ) as? JSONObject ?: throw SharedLibraryException("The librarian returned invalid collections.")
+        val collectionsJson = response.optJSONArray("collections") ?: JSONArray()
+        val collections = (0 until collectionsJson.length()).map { index ->
+            val collection = collectionsJson.getJSONObject(index)
+            val kind = AiCollectionKind.fromWireValue(collection.getString("kind"))
+                ?: throw SharedLibraryException("The librarian returned an unknown collection type.")
+            val bookIds = collection.getJSONArray("bookIds")
+            AiCollectionProposal(
+                name = collection.getString("name"),
+                kind = kind,
+                bookUuids = (0 until bookIds.length()).map { bookIds.getString(it) },
+                confidence = collection.getDouble("confidence").toFloat(),
+                explanation = collection.getString("explanation"),
+            )
+        }
+        AiCurationResult(
+            collections = collections,
+            model = response.getString("model"),
+            taxonomyVersion = response.getString("taxonomyVersion"),
+        )
+    }
+
     fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().buffered().use { input ->
@@ -465,6 +608,8 @@ class SharedLibraryApi(
 
     private fun publicationFromJson(row: JSONObject): SharedPublication {
         val genres = row.optJSONArray("genres") ?: JSONArray()
+        val collections = row.optJSONArray("collection_names") ?: JSONArray()
+        val createdAt = row.optString("created_at")
         return SharedPublication(
             uuid = row.getString("publication_uuid"),
             libraryUuid = row.getString("library_uuid"),
@@ -477,8 +622,26 @@ class SharedLibraryApi(
             seriesIndex = if (row.isNull("series_index")) null else row.optDouble("series_index").toFloat(),
             sha256 = row.getString("sha256"),
             sizeBytes = row.optLong("size_bytes"),
-            createdAt = row.optString("created_at"),
+            createdAt = createdAt,
+            updatedAt = row.optString("updated_at").ifBlank { createdAt },
             status = row.optString("status"),
+            collectionNames = (0 until collections.length())
+                .mapNotNull { collections.optString(it).takeIf(String::isNotBlank) },
+        )
+    }
+
+    private fun collectionFromJson(row: JSONObject): SharedCollection {
+        val publicationUuids = row.optJSONArray("publication_uuids") ?: JSONArray()
+        return SharedCollection(
+            uuid = row.getString("collection_uuid"),
+            libraryUuid = row.getString("library_uuid"),
+            name = row.getString("name"),
+            kind = row.optString("kind", "manual"),
+            description = row.optNullableString("description"),
+            publicationUuids = (0 until publicationUuids.length()).map { publicationUuids.getString(it) },
+            bookCount = row.optInt("book_count"),
+            createdAt = row.optString("created_at"),
+            updatedAt = row.optString("updated_at"),
         )
     }
 

@@ -23,6 +23,47 @@ data class AiEnrichmentResult(
     val taxonomyVersion: String,
 )
 
+data class AiCurationBook(
+    val id: String,
+    val title: String,
+    val author: String,
+    val category: String?,
+    val genres: List<String>,
+    val seriesName: String?,
+    val seriesIndex: Float?,
+)
+
+enum class AiCollectionKind(val wireValue: String) {
+    SERIES("series"),
+    AUTHOR("author"),
+    THEME("theme");
+
+    companion object {
+        fun fromWireValue(value: String): AiCollectionKind? = entries.firstOrNull { it.wireValue == value }
+    }
+}
+
+data class AiCollectionProposal(
+    val name: String,
+    val kind: AiCollectionKind,
+    val bookUuids: List<String>,
+    val confidence: Float,
+    val explanation: String,
+)
+
+data class AiCurationResult(
+    val collections: List<AiCollectionProposal>,
+    val model: String,
+    val taxonomyVersion: String,
+)
+
+data class AiOrganizeSummary(
+    val appliedBooks: Int,
+    val reviewBooks: Int,
+    val curatedCollections: Int,
+    val thematicCurationAvailable: Boolean,
+)
+
 sealed interface AiOrganizeOutcome {
     data object Applied : AiOrganizeOutcome
     data object NeedsReview : AiOrganizeOutcome

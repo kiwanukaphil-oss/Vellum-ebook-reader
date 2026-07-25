@@ -11,6 +11,58 @@ import org.junit.Test
 
 class VellumMigrationTest {
     @Test
+    fun migrationElevenToTwelveMakesCollectionsEditableWithoutChangingThem() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "migration-11-12-${System.nanoTime()}.db"
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(databaseName)
+                .callback(
+                    object : SupportSQLiteOpenHelper.Callback(11) {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            db.execSQL(
+                                "CREATE TABLE collections (" +
+                                    "uuid TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, " +
+                                    "createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, deletedAt INTEGER)",
+                            )
+                        }
+
+                        override fun onUpgrade(
+                            db: SupportSQLiteDatabase,
+                            oldVersion: Int,
+                            newVersion: Int,
+                        ) = Unit
+                    },
+                )
+                .build(),
+        )
+
+        try {
+            val database = helper.writableDatabase
+            database.execSQL(
+                "INSERT INTO collections VALUES ('existing', 'My collection', 1, 2, NULL)",
+            )
+
+            VellumDatabase.MIGRATION_11_12.migrate(database)
+
+            val columns = columnNames(database, "collections")
+            assertTrue(columns.contains("kind"))
+            assertTrue(columns.contains("description"))
+            database.query(
+                "SELECT name, kind, description FROM collections WHERE uuid = 'existing'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("My collection", cursor.getString(0))
+                assertEquals("manual", cursor.getString(1))
+                assertTrue(cursor.isNull(2))
+            }
+        } finally {
+            helper.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
+    @Test
     fun migrationTenToElevenAddsCachedContentFingerprintWithoutChangingBooks() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val databaseName = "migration-10-11-${System.nanoTime()}.db"

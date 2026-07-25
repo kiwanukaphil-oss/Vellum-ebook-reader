@@ -412,21 +412,42 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
                         state.value.genresByBook[book.uuid].isNullOrEmpty()
                 }
             }
-            if (candidates.isEmpty()) {
-                aiStatus.value = "Everything is already organised."
+            if (state.value.allBooks.isEmpty()) {
+                aiStatus.value = "Add a few books and the librarian will begin shaping your shelves."
                 return@launch
             }
-            aiStatus.value = "Organising 0 of ${candidates.size}…"
-            val (applied, review) = app.aiLibrarian.organizeAll(
+            aiStatus.value = if (candidates.isEmpty()) {
+                "Curating collections…"
+            } else {
+                "Organising 0 of ${candidates.size}…"
+            }
+            val summary = app.aiLibrarian.organizeAll(
                 bookUuids = candidates.map { it.uuid },
                 force = force,
             ) { complete, total ->
                 aiStatus.value = "Organising $complete of $total…"
             }
             aiStatus.value = buildString {
-                append("$applied organised")
-                if (review > 0) append(" · $review ${if (review == 1) "suggestion" else "suggestions"} to review")
-                if (applied == 0 && review == 0) append(" · nothing new")
+                append("${summary.appliedBooks} organised")
+                if (summary.reviewBooks > 0) {
+                    append(" · ${summary.reviewBooks} ")
+                    append(if (summary.reviewBooks == 1) "suggestion" else "suggestions")
+                    append(" to review")
+                }
+                if (summary.curatedCollections > 0) {
+                    append(" · ${summary.curatedCollections} ")
+                    append(if (summary.curatedCollections == 1) "collection shaped" else "collections shaped")
+                }
+                if (
+                    summary.appliedBooks == 0 &&
+                    summary.reviewBooks == 0 &&
+                    summary.curatedCollections == 0
+                ) {
+                    append(" · everything is already in place")
+                }
+                if (!summary.thematicCurationAvailable) {
+                    append(" · author and series shelves updated; themes can be retried later")
+                }
             }
         }
     }
@@ -438,8 +459,12 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
                 aiStatus.value = "Sign in to Shared Libraries once to use the private AI Librarian."
                 return@launch
             }
-            val (applied, review) = app.aiLibrarian.organizeAll(bookUuids.toList(), force)
-            aiStatus.value = "$applied organised${if (review > 0) " · $review to review" else ""}"
+            val summary = app.aiLibrarian.organizeAll(bookUuids.toList(), force)
+            aiStatus.value = buildString {
+                append("${summary.appliedBooks} organised")
+                if (summary.reviewBooks > 0) append(" · ${summary.reviewBooks} to review")
+                if (summary.curatedCollections > 0) append(" · ${summary.curatedCollections} collections shaped")
+            }
         }
     }
 
@@ -485,11 +510,82 @@ class LibraryViewModel(private val app: VellumApp) : ViewModel() {
         if (cleanName.isBlank()) return
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val collection = CollectionEntity(UUID.randomUUID().toString(), cleanName, now, now, null)
+            val collection = CollectionEntity(
+                uuid = UUID.randomUUID().toString(),
+                name = cleanName,
+                kind = "manual",
+                description = null,
+                createdAt = now,
+                updatedAt = now,
+                deletedAt = null,
+            )
             app.collectionDao.upsertCollection(collection)
             assignToBooks.forEach {
                 app.collectionDao.upsertBookCollection(BookCollectionCrossRef(it, collection.uuid, now, null))
             }
+        }
+    }
+
+    fun saveCollection(
+        collectionUuid: String,
+        name: String,
+        kind: String,
+        description: String?,
+        bookUuids: Set<String>,
+        onFinished: () -> Unit = {},
+    ) {
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) return
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            app.database.withTransaction {
+                val existing = app.collectionDao.allCollectionsRaw()
+                    .firstOrNull { it.uuid == collectionUuid && it.deletedAt == null }
+                    ?: return@withTransaction
+                app.collectionDao.upsertCollection(
+                    existing.copy(
+                        name = cleanName.take(80),
+                        kind = kind.takeIf { it in setOf("manual", "series", "author", "theme") } ?: "manual",
+                        description = description?.trim()?.take(280)?.ifBlank { null },
+                        updatedAt = now,
+                    ),
+                )
+                val links = app.collectionDao.allBookCollectionsRaw()
+                    .filter { it.collectionUuid == collectionUuid }
+                    .associateBy { it.bookUuid }
+                state.value.allBooks.forEach { book ->
+                    val link = links[book.uuid]
+                    when {
+                        book.uuid in bookUuids && link?.deletedAt != null ->
+                            app.collectionDao.upsertBookCollection(link.copy(updatedAt = now, deletedAt = null))
+                        book.uuid in bookUuids && link == null ->
+                            app.collectionDao.upsertBookCollection(
+                                BookCollectionCrossRef(book.uuid, collectionUuid, now, null),
+                            )
+                        book.uuid !in bookUuids && link != null && link.deletedAt == null ->
+                            app.collectionDao.upsertBookCollection(link.copy(updatedAt = now, deletedAt = now))
+                    }
+                }
+            }
+            onFinished()
+        }
+    }
+
+    fun removeCollection(collection: CollectionEntity, onFinished: () -> Unit = {}) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            app.database.withTransaction {
+                app.collectionDao.upsertCollection(collection.copy(updatedAt = now, deletedAt = now))
+                app.collectionDao.allBookCollectionsRaw()
+                    .filter { it.collectionUuid == collection.uuid && it.deletedAt == null }
+                    .forEach { link ->
+                        app.collectionDao.upsertBookCollection(link.copy(updatedAt = now, deletedAt = now))
+                    }
+            }
+            if ((filter.value as? ShelfFilter.InCollection)?.collectionUuid == collection.uuid) {
+                filter.value = ShelfFilter.All
+            }
+            onFinished()
         }
     }
 

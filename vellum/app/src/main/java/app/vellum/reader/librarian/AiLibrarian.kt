@@ -3,8 +3,10 @@ package app.vellum.reader.librarian
 import androidx.room.withTransaction
 import app.vellum.reader.VellumApp
 import app.vellum.reader.core.data.AiMetadataSuggestionEntity
+import app.vellum.reader.core.data.BookCollectionCrossRef
 import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.data.BookGenreCrossRef
+import app.vellum.reader.core.data.CollectionEntity
 import app.vellum.reader.core.data.GenreEntity
 import app.vellum.reader.library.BookCategories
 import app.vellum.reader.shared.SharedAccountState
@@ -81,7 +83,7 @@ class AiLibrarian(private val app: VellumApp) {
         bookUuids: List<String>,
         force: Boolean = false,
         onProgress: (completed: Int, total: Int) -> Unit = { _, _ -> },
-    ): Pair<Int, Int> {
+    ): AiOrganizeSummary {
         var applied = 0
         var review = 0
         val uniqueBookUuids = bookUuids.distinct()
@@ -93,7 +95,13 @@ class AiLibrarian(private val app: VellumApp) {
             }
             onProgress(index + 1, uniqueBookUuids.size)
         }
-        return applied to review
+        val (curatedCollections, thematicCurationAvailable) = curateCollections()
+        return AiOrganizeSummary(
+            appliedBooks = applied,
+            reviewBooks = review,
+            curatedCollections = curatedCollections,
+            thematicCurationAvailable = thematicCurationAvailable,
+        )
     }
 
     suspend fun apply(suggestionUuid: String, conservative: Boolean = false): Boolean {
@@ -187,6 +195,125 @@ class AiLibrarian(private val app: VellumApp) {
 
     suspend fun dismiss(suggestionUuid: String) {
         app.aiMetadataDao.dismiss(suggestionUuid)
+    }
+
+    private suspend fun curateCollections(): Pair<Int, Boolean> {
+        val books = app.bookDao.allActive()
+        if (books.size < 2) return 0 to true
+        val genres = app.collectionDao.allGenresRaw()
+            .filter { it.deletedAt == null }
+            .associateBy { it.uuid }
+        val genreNamesByBook = app.collectionDao.allBookGenresRaw()
+            .asSequence()
+            .filter { it.deletedAt == null }
+            .groupBy({ it.bookUuid }, { genres[it.genreUuid]?.name })
+            .mapValues { (_, names) -> names.filterNotNull().distinct() }
+        val curationBooks = books.map { book ->
+            AiCurationBook(
+                id = book.uuid,
+                title = book.title,
+                author = book.author,
+                category = book.category,
+                genres = genreNamesByBook[book.uuid].orEmpty(),
+                seriesName = book.seriesName,
+                seriesIndex = book.seriesIndex,
+            )
+        }
+        val remoteResult = runCatching {
+            app.sharedLibraryRepository.curateLibrary(curationBooks)
+        }
+        val proposals = AiCollectionCurator.acceptedProposals(
+            books = curationBooks,
+            remote = remoteResult.getOrNull()?.collections.orEmpty(),
+        )
+        return applyCollectionProposals(proposals) to remoteResult.isSuccess
+    }
+
+    private suspend fun applyCollectionProposals(proposals: List<AiCollectionProposal>): Int {
+        if (proposals.isEmpty()) return 0
+        val existingCollections = app.collectionDao.allCollectionsRaw()
+        val existingLinks = app.collectionDao.allBookCollectionsRaw()
+            .associateByTo(mutableMapOf()) { it.bookUuid to it.collectionUuid }
+        val now = System.currentTimeMillis()
+        var changedCollections = 0
+        app.database.withTransaction {
+            proposals.forEach { proposal ->
+                val key = AiCollectionCurator.normalize(proposal.name)
+                val proposalMembers = proposal.bookUuids.toSet()
+                val matchingCollections = existingCollections
+                    .filter { AiCollectionCurator.matchesCollectionIdentity(proposal, it.name) }
+                    .filter { collection ->
+                        AiCollectionCurator.normalize(collection.name) == key ||
+                            existingLinks.values
+                                .filter { it.collectionUuid == collection.uuid && it.deletedAt == null }
+                                .all { it.bookUuid in proposalMembers }
+                    }
+                val existing = matchingCollections
+                    .firstOrNull { it.deletedAt == null && AiCollectionCurator.normalize(it.name) == key }
+                    ?: matchingCollections.firstOrNull { it.deletedAt == null }
+                    ?: matchingCollections.firstOrNull()
+                val collectionUuid = existing?.uuid ?: UUID.nameUUIDFromBytes(
+                    "vellum-ai-collection:$key".toByteArray(),
+                ).toString()
+                var changed = existing == null ||
+                    existing.deletedAt != null ||
+                    existing.name.trim() != proposal.name.trim()
+                if (changed) {
+                    app.collectionDao.upsertCollection(
+                        CollectionEntity(
+                            uuid = collectionUuid,
+                            name = proposal.name.trim(),
+                            kind = proposal.kind.wireValue,
+                            description = proposal.explanation,
+                            createdAt = existing?.createdAt ?: now,
+                            updatedAt = now,
+                            deletedAt = null,
+                        ),
+                    )
+                }
+                val duplicateCollections = matchingCollections.filter { it.uuid != collectionUuid }
+                val completedMembers = (
+                    proposal.bookUuids +
+                        duplicateCollections.flatMap { duplicate ->
+                            existingLinks.values
+                                .filter { it.collectionUuid == duplicate.uuid && it.deletedAt == null }
+                                .map { it.bookUuid }
+                        }
+                    ).distinct()
+                completedMembers.forEach { bookUuid ->
+                    val current = existingLinks[bookUuid to collectionUuid]
+                    if (current == null || current.deletedAt != null) {
+                        val restored = BookCollectionCrossRef(
+                            bookUuid = bookUuid,
+                            collectionUuid = collectionUuid,
+                            updatedAt = now,
+                            deletedAt = null,
+                        )
+                        app.collectionDao.upsertBookCollection(restored)
+                        existingLinks[bookUuid to collectionUuid] = restored
+                        changed = true
+                    }
+                }
+                duplicateCollections.forEach { duplicate ->
+                    existingLinks.values
+                        .filter { it.collectionUuid == duplicate.uuid && it.deletedAt == null }
+                        .toList()
+                        .forEach { link ->
+                            val archivedLink = link.copy(updatedAt = now, deletedAt = now)
+                            app.collectionDao.upsertBookCollection(archivedLink)
+                            existingLinks[link.bookUuid to link.collectionUuid] = archivedLink
+                        }
+                    if (duplicate.deletedAt == null) {
+                        app.collectionDao.upsertCollection(
+                            duplicate.copy(updatedAt = now, deletedAt = now),
+                        )
+                        changed = true
+                    }
+                }
+                if (changed) changedCollections++
+            }
+        }
+        return changedCollections
     }
 
     private suspend fun genreNamesFor(bookUuid: String): List<String> {

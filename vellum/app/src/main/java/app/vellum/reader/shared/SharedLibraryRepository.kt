@@ -7,6 +7,8 @@ import app.vellum.reader.core.data.BookEntity
 import app.vellum.reader.core.data.BookGenreCrossRef
 import app.vellum.reader.core.data.GenreEntity
 import app.vellum.reader.library.BookImporter
+import app.vellum.reader.librarian.AiCurationBook
+import app.vellum.reader.librarian.AiCurationResult
 import app.vellum.reader.librarian.AiEnrichmentRequest
 import app.vellum.reader.librarian.AiEnrichmentResult
 import java.io.File
@@ -76,6 +78,45 @@ class SharedLibraryRepository(
         query: String = "",
     ): List<SharedPublication> =
         authenticated { api.publications(libraryUuid, query, it) }
+
+    suspend fun archivedPublications(libraryUuid: String): List<SharedPublication> =
+        authenticated { api.archivedPublications(libraryUuid, it) }
+
+    suspend fun collections(libraryUuid: String): List<SharedCollection> =
+        authenticated { api.collections(libraryUuid, it) }
+
+    suspend fun updatePublication(publicationUuid: String, edit: SharedPublicationEdit) =
+        authenticated { api.updatePublication(publicationUuid, edit, it) }
+
+    suspend fun setPublicationsArchived(
+        libraryUuid: String,
+        publicationUuids: Collection<String>,
+        archived: Boolean,
+    ): Int = authenticated {
+        api.setPublicationsArchived(libraryUuid, publicationUuids, archived, it)
+    }
+
+    suspend fun upsertCollection(
+        libraryUuid: String,
+        collectionUuid: String?,
+        name: String,
+        kind: String,
+        description: String?,
+        publicationUuids: Collection<String>,
+    ): String = authenticated {
+        api.upsertCollection(
+            libraryUuid,
+            collectionUuid,
+            name,
+            kind,
+            description,
+            publicationUuids,
+            it,
+        )
+    }
+
+    suspend fun archiveCollection(libraryUuid: String, collectionUuid: String) =
+        authenticated { api.archiveCollection(libraryUuid, collectionUuid, it) }
 
     suspend fun createLibrary(name: String, description: String?): SharedLibrarySummary =
         authenticated { api.createLibrary(name, description, it) }
@@ -222,6 +263,9 @@ class SharedLibraryRepository(
 
     suspend fun enrichBook(request: AiEnrichmentRequest): AiEnrichmentResult =
         authenticated { api.enrichBook(request, it) }
+
+    suspend fun curateLibrary(books: List<AiCurationBook>): AiCurationResult =
+        authenticated { api.curateLibrary(books, it) }
 
     private suspend fun applyGenres(bookUuid: String, names: List<String>, now: Long) {
         if (names.isEmpty()) return
