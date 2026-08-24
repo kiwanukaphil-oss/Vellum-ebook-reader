@@ -2,8 +2,15 @@
 -- this script assigns the deployment-specific database password on first boot.
 \set pgpass `echo "$POSTGRES_PASSWORD"`
 
-alter user authenticator with password :'pgpass';
-alter user pgbouncer with password :'pgpass';
-alter user supabase_auth_admin with password :'pgpass';
-alter user supabase_functions_admin with password :'pgpass';
-alter user supabase_storage_admin with password :'pgpass';
+select format('alter role %I with password %L;', candidate_role, :'pgpass')
+from unnest(array[
+  'authenticator',
+  'pgbouncer',
+  'supabase_auth_admin',
+  'supabase_functions_admin',
+  'supabase_storage_admin'
+]) as candidate_roles(candidate_role)
+where exists (
+  select 1 from pg_roles where rolname = candidate_role
+)
+\gexec

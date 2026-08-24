@@ -53,7 +53,8 @@ remain environment-owned secrets so they never enter source control.
 - Generate a public HTTPS domain only for `gateway`.
 - Keep `db`, `auth`, and `rest` on Railway private networking.
 - Mount `vellum-db-data` at `/var/lib/postgresql/data`; PostgreSQL uses the
-  `pgdata` subdirectory so Railway's volume metadata does not block `initdb`.
+  `pgdata` subdirectory for both initialization and runtime so Railway's volume
+  metadata does not block `initdb`.
 - Keep serverless sleeping disabled for all four services.
 - Enable daily and weekly backups on the database volume before importing data.
 
