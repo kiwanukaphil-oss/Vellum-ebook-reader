@@ -4,6 +4,7 @@
 
 select format('alter role %I with password %L;', candidate_role, :'pgpass')
 from unnest(array[
+  'postgres',
   'authenticator',
   'pgbouncer',
   'supabase_auth_admin',
