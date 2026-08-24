@@ -102,7 +102,7 @@ export default defineRailway((railwayContext) => {
     healthcheckTimeout: 120,
     env: {
       PORT: "3000",
-      PGRST_SERVER_HOST: "*",
+      PGRST_SERVER_HOST: "*6",
       PGRST_DB_URI:
         "postgres://authenticator:${{shared.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/postgres",
       PGRST_DB_SCHEMAS: "public",
