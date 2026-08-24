@@ -1,0 +1,12 @@
+{
+  "name": "vellum-railway-infrastructure",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit --project tsconfig.json"
+  },
+  "devDependencies": {
+    "railway": "3.11.0",
+    "typescript": "7.0.2"
+  }
+}
