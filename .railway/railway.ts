@@ -36,6 +36,7 @@ export default defineRailway((railwayContext) => {
       POSTGRES_PASSWORD: normalizedRailwayContext.shared.POSTGRES_PASSWORD,
       POSTGRES_PORT: "5432",
       PGPORT: "5432",
+      PGDATA: "/var/lib/postgresql/data/pgdata",
       JWT_SECRET: normalizedRailwayContext.shared.JWT_SECRET,
       JWT_EXP: "3600",
     },
