@@ -9,7 +9,7 @@ import {
 
 const repositorySource = "kiwanukaphil-oss/Vellum-ebook-reader";
 const deploymentBranch = "agent/elevenlabs-narration-cache";
-const primaryRegion = "europe-west4";
+const primaryRegion = "europe-west4-drams3a";
 
 // Declares Vellum's complete minimal Supabase-compatible Railway project. Secrets
 // remain environment-owned shared variables, while service-to-service traffic stays

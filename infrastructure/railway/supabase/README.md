@@ -60,9 +60,9 @@ remain environment-owned secrets so they never enter source control.
 Railway supports one volume per service. PostgreSQL configuration remains baked
 into the pinned database image, so only the database data directory is mounted.
 
-The IaC uses the confirmed `europe-west4` region, matching the existing European
-R2 placement. Changing a persisted volume's region later requires a data
-migration.
+The IaC uses Railway's current `europe-west4-drams3a` identifier for the
+confirmed `europe-west4` region, matching the existing European R2 placement.
+Changing a persisted volume's region later requires a data migration.
 
 ## Local validation
 
