@@ -53,9 +53,11 @@ remain environment-owned secrets so they never enter source control.
 - Generate a public HTTPS domain only for `gateway`.
 - Keep `db`, `auth`, and `rest` on Railway private networking.
 - Mount `vellum-db-data` at `/var/lib/postgresql/data`.
-- Mount `vellum-db-config` at `/etc/postgresql-custom`.
 - Keep serverless sleeping disabled for all four services.
-- Enable daily and weekly backups on both database volumes before importing data.
+- Enable daily and weekly backups on the database volume before importing data.
+
+Railway supports one volume per service. PostgreSQL configuration remains baked
+into the pinned database image, so only the database data directory is mounted.
 
 The IaC uses the confirmed `europe-west4` region, matching the existing European
 R2 placement. Changing a persisted volume's region later requires a data
@@ -80,5 +82,5 @@ external resources and belongs to the next approved phase. Before applying:
 
 1. Confirm the Railway region and SMTP provider.
 2. Review all shared variables without printing secrets to logs.
-3. Review the plan for exactly four services and two volumes.
+3. Review the plan for exactly four services and one volume.
 4. Reject any unexpected deletion or change to unrelated Railway projects.

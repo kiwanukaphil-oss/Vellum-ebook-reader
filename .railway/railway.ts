@@ -22,11 +22,6 @@ export default defineRailway((railwayContext) => {
     region: primaryRegion,
     sizeMB: 1024,
   });
-  const databaseConfigVolume = volume("vellum-db-config", {
-    region: primaryRegion,
-    sizeMB: 512,
-  });
-
   const databaseService = service("db", {
     source: github(repositorySource, {
       branch: deploymentBranch,
@@ -35,7 +30,6 @@ export default defineRailway((railwayContext) => {
     replicas: { [primaryRegion]: 1 },
     volumeMounts: {
       "/var/lib/postgresql/data": databaseDataVolume,
-      "/etc/postgresql-custom": databaseConfigVolume,
     },
     env: {
       POSTGRES_DB: "postgres",
@@ -143,7 +137,6 @@ export default defineRailway((railwayContext) => {
   return project("vellum-shared-library", {
     resources: [
       databaseDataVolume,
-      databaseConfigVolume,
       databaseService,
       authenticationService,
       dataApiService,
