@@ -17,7 +17,7 @@ trap 'forward_database_signal INT' INT
 
 docker-entrypoint.sh postgres \
   -c config_file=/etc/postgresql/postgresql.conf \
-  -c data_directory=/var/lib/postgresql/data/pgdata \
+  -c "data_directory=${PGDATA:-/var/lib/postgresql/data/pgdata}" \
   -c log_min_messages=fatal &
 database_server_pid=$!
 

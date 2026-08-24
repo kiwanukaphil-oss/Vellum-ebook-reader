@@ -36,7 +36,9 @@ export default defineRailway((railwayContext) => {
       POSTGRES_PASSWORD: normalizedRailwayContext.shared.POSTGRES_PASSWORD,
       POSTGRES_PORT: "5432",
       PGPORT: "5432",
-      PGDATA: "/var/lib/postgresql/data/pgdata",
+      // Removal candidate: the earlier partial bootstrap remains under `pgdata`.
+      // Keep it untouched until the clean `pgdata-v2` deployment is verified.
+      PGDATA: "/var/lib/postgresql/data/pgdata-v2",
       JWT_SECRET: normalizedRailwayContext.shared.JWT_SECRET,
       JWT_EXP: "3600",
     },
